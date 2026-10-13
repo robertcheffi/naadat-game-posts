@@ -29,9 +29,11 @@ Exit codes:
      alone: pass both on to the user)
   1  error (no such game, a pre-game for a game already played, unreadable input,
      no network; the message says what to do)
-  2  the game has started but is not final yet (also without --game-id: a newer
-     game than the last final one has been played). Wait for the official result,
-     or pass --allow-unfinished to use it anyway
+  2  no result yet. Either the game has not been played (its face-off is still
+     ahead): make the pre-game post with --pregame instead; --allow-unfinished
+     does not change this. Or the game has started but is not final yet (also
+     without --game-id: a newer game than the last final one has been played):
+     wait for the official result, or pass --allow-unfinished to use it anyway
   3  --validate printed a WARNING other than a missing logo_file. Fix the file
      or ask the user, then run --validate again. Do not render before it exits 0
 
@@ -59,7 +61,6 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 SCRIPT = os.path.abspath(__file__)
 SKILL_DIR = os.path.dirname(HERE)
 CONFIG_PATH = os.path.join(SKILL_DIR, "assets", "brand", "team.json")
-TEMPLATE_PATH = os.path.join(SKILL_DIR, "references", "manual_game_template.json")
 REPORT_TEMPLATE = BASE + "/gamereport/getgamereportdata?gameid=<GAME_ID>&season=<SEASON>"
 MANUAL_HINT = ("Only III-divisioona games are on tulospalvelu.leijonat.fi. For FCAA or other games, "
                "fill references/manual_game_template.json by hand (SKILL.md step 1, FCAA) and check it "
@@ -87,15 +88,11 @@ NAME_PARTICLES = {"von", "van", "de", "af", "der", "den", "da", "du", "zu",
 PLACEHOLDER_TEAM_NAMES = {"opponent"}
 PLACEHOLDER_PERSON_WORDS = {"esimerkki", "malli", "kuvitteellinen"}
 PLACEHOLDER_FULL_NAMES = {"first last"}
-TEMPLATE_DATE_FALLBACK = "2026-10-15"
-# Example values earlier template versions shipped with; a manual game.json that
-# still has them was most likely not filled in (--validate warns).
-LEGACY_TEMPLATE_ARENA = "Helsingin jäähalli"
-LEGACY_TEMPLATE_TIME = "21:00"
-LEGACY_TEMPLATE_PERIODS = (("1", 1, 0), ("2", 2, 1), ("3", 1, 1))
+# The templates ship these literal placeholders; --validate warns while one is left.
+PLACEHOLDER_DATE = "YYYY-MM-DD"
+PLACEHOLDER_TIME = "HH:MM"
 GAME_SCHEMA = "naadat-result-post/game@1"
 PREGAME_SCHEMA = "naadat-result-post/pregame@1"
-PREGAME_TEMPLATE_PATH = os.path.join(SKILL_DIR, "references", "manual_pregame_template.json")
 WEEKDAYS = ("MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN")
 
 
@@ -134,7 +131,7 @@ def setup_streams() -> None:
 
 
 def load_config() -> dict:
-    with open(CONFIG_PATH, encoding="utf-8") as f:
+    with open(CONFIG_PATH, encoding="utf-8-sig") as f:
         return json.load(f)
 
 
@@ -218,7 +215,7 @@ def get_json(path: str, params: dict) -> object:
     except (urllib.error.URLError, OSError) as exc:
         raise NetError(url, exc)
     try:
-        return json.loads(body.decode("utf-8"))
+        return json.loads(body.decode("utf-8-sig"))
     except ValueError as exc:
         raise NetError(url, f"the response was not JSON ({exc}); a proxy or block page may be in the way")
 
@@ -519,7 +516,7 @@ def normalize(g: dict, report: dict, cfg: dict, season: int) -> dict:
         "series": g.get("SubSerieName", ""),
         "date": when.date().isoformat(),
         "time": when.strftime("%H:%M"),
-        "arena": gu.get("Arena") or g.get("RinkName") or "",
+        **arena_fields(gu.get("Arena"), g.get("ScheduleRinkName") or (g.get("RinkName") if not gu else "")),
         "attendance": g.get("Spectator") or None,  # 0 means not recorded
         "finish": finish,
         "result": result,
@@ -571,12 +568,36 @@ def game_from_report(report: dict, schedule_entry: dict = None) -> dict:
         "HomeAssociationID": home.get("AssId"), "AwayAssociationID": away.get("AssId"),
         "HomeImg": home.get("Image") or s.get("HomeImg", ""), "AwayImg": away.get("Image") or s.get("AwayImg", ""),
         "RinkName": gu.get("Arena") or s.get("RinkName", ""),
+        "ScheduleRinkName": s.get("RinkName", ""),
         "Spectator": spectators if spectators is not None else s.get("Spectator"),
         "LevelName": gu.get("LevelName") or s.get("LevelName", ""),
         "SubSerieName": gu.get("SubSerieName") or s.get("SubSerieName", ""),
         "PeriodSummary": {"PlayedPeriods": len(pairs),
                           "PeriodGoals": {"Home": [p[0] for p in pairs], "Away": [p[1] for p in pairs]}},
     }
+
+
+def clean_rink(value) -> str:
+    return " ".join(value.split()) if isinstance(value, str) else ""
+
+
+def arena_fields(report_arena, schedule_rink) -> dict:
+    """The rink, the same way for post-game and pre-game: the report's Arena (the
+    rink's full name, e.g. 'Ilmatar Areena') when it has one, else the schedule's
+    RinkName (e.g. 'Matinkylä I'). When both exist and differ, the schedule's name
+    is kept as arena_short so the user can check which one fans know."""
+    report_arena, schedule_rink = clean_rink(report_arena), clean_rink(schedule_rink)
+    out = {"arena": report_arena or schedule_rink}
+    if report_arena and schedule_rink and report_arena.casefold() != schedule_rink.casefold():
+        out["arena_short"] = schedule_rink
+    return out
+
+
+def arena_text(data: dict) -> str:
+    """'Ilmatar Areena (schedule: Matinkylä I)', or the arena alone."""
+    arena = clean_rink(data.get("arena"))
+    short = clean_rink(data.get("arena_short"))
+    return f"{arena} (schedule: {short})" if arena and short else arena
 
 
 def load_json_file(path: str, what: str):
@@ -657,7 +678,9 @@ def summary_line(data: dict, verb: str, path: str, us_side: str = None) -> str:
     venue = ""
     if data.get("source") == "manual":
         # Hand-entered files: show the arena, so the user confirms it too.
-        venue = f" at {data.get('arena')}" if str(data.get("arena") or "").strip() else " (no arena)"
+        venue = f" at {arena_text(data)}" if arena_text(data) else " (no arena)"
+    elif data.get("arena_short"):
+        venue = f" at {arena_text(data)}"
     return f"{verb} {path}: {fi_date(data.get('date'))} {teams}{venue}, {logged_goals(data)} goals in the log."
 
 
@@ -676,7 +699,7 @@ def pregame_line(data: dict, verb: str, path: str, us_side: str = None) -> str:
         teams = f"{us.get('name')} vs {them.get('name')} ({side})"
     else:
         teams = f"home {home.get('name')} vs away {away.get('name')} (Näädät side unknown)"
-    arena = str(data.get("arena") or "").strip()
+    arena = arena_text(data)
     return f"{verb} {path}: {when} {teams} {'at ' + arena if arena else '(no arena)'}"
 
 
@@ -694,10 +717,42 @@ def goal_log_warning(data: dict):
     return None
 
 
+def rink_note(data: dict) -> None:
+    if data.get("arena_short"):
+        print(f"note: the game report names the rink {data['arena']!r}, the schedule {data['arena_short']!r}; "
+              "arena is the report's, arena_short the schedule's. Tell the user which one the post shows.")
+
+
+_SCHEDULE_CACHE = {}
+
+
+def add_season_index(data: dict) -> None:
+    """Position of the game in our season schedule (0 = first game), used to rotate photos.
+
+    Best effort: the post works without it (the renderer then rotates by date), so a
+    schedule that cannot be reached only skips the field.
+    """
+    if data.get("season_index") is not None or not data.get("game_id") or not data.get("season"):
+        return
+    season = data["season"]
+    try:
+        if season not in _SCHEDULE_CACHE:
+            games = discover_games(load_config(), season)
+            games.sort(key=game_datetime)
+            _SCHEDULE_CACHE[season] = [g["GameID"] for g in games]
+        ids = _SCHEDULE_CACHE[season]
+    except BaseException:  # noqa: BLE001  network or shape problem: rotate by date instead
+        return
+    if data["game_id"] in ids:
+        data["season_index"] = ids.index(data["game_id"])
+
+
 def write(data: dict, out: str) -> int:
+    add_season_index(data)
     with open(out, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
     print(summary_line(data, "Wrote", out))
+    rink_note(data)
     warning = goal_log_warning(data)
     if warning:
         print(warning)
@@ -712,52 +767,6 @@ def build(g: dict, report: dict, cfg: dict, season: int) -> dict:
     except (KeyError, TypeError, AttributeError, ValueError, IndexError) as exc:
         raise Stop(f"The game report for game {g.get('GameID')} has an unexpected shape "
                    f"({type(exc).__name__}: {exc}). Save the raw game-report JSON again, unedited.")
-
-
-def template_date() -> str:
-    try:
-        with open(TEMPLATE_PATH, encoding="utf-8-sig") as f:
-            return str(json.load(f).get("date") or TEMPLATE_DATE_FALLBACK)
-    except Exception:
-        return TEMPLATE_DATE_FALLBACK
-
-
-def template_values() -> dict:
-    """Example values of the manual game template that must not reach a post: the
-    ones it ships with now, plus the ones earlier versions shipped with."""
-    out = {"arena": {LEGACY_TEMPLATE_ARENA}, "time": {LEGACY_TEMPLATE_TIME}, "periods": [LEGACY_TEMPLATE_PERIODS]}
-    try:
-        with open(TEMPLATE_PATH, encoding="utf-8-sig") as f:
-            tpl = json.load(f)
-    except Exception:
-        return out
-    if isinstance(tpl, dict):
-        if str(tpl.get("arena") or "").strip():
-            out["arena"].add(str(tpl["arena"]).strip())
-        if str(tpl.get("time") or "").strip():
-            out["time"].add(str(tpl["time"]).strip())
-        rows = period_key(tpl.get("periods"))
-        if rows:
-            out["periods"].append(rows)
-    return out
-
-
-def pregame_template_date() -> str:
-    try:
-        with open(PREGAME_TEMPLATE_PATH, encoding="utf-8-sig") as f:
-            return str(json.load(f).get("date") or "")
-    except Exception:
-        return ""
-
-
-def period_key(periods):
-    """A periods list as a comparable tuple, or None when it is not one."""
-    if not isinstance(periods, list) or not periods:
-        return None
-    try:
-        return tuple((str(p["label"]), int(p["home"]), int(p["away"])) for p in periods)
-    except (KeyError, TypeError, ValueError):
-        return None
 
 
 def name_texts(obj) -> list:
@@ -857,6 +866,31 @@ def finish_validate(line: str, warnings: list, notes: list, logo_warnings: list,
     return 0
 
 
+def date_time_checks(data: dict, warnings: list, time_required: bool):
+    """date and time of a game or pregame file. The templates ship the literal
+    placeholders 'YYYY-MM-DD' and 'HH:MM'; one left in is a WARNING. Returns the
+    game day, or None when the date is not usable."""
+    date = str(data.get("date") or "").strip()
+    day = None
+    if date.upper() == PLACEHOLDER_DATE:
+        warnings.append(f"date is the template placeholder {PLACEHOLDER_DATE!r}; set the game day the user gave "
+                        "(ask if unknown)")
+    else:
+        try:
+            day = dt.datetime.strptime(date, "%Y-%m-%d").date()
+        except ValueError:
+            warnings.append(f"date {data.get('date')!r} is not ISO YYYY-MM-DD; set the game day")
+    time_s = str(data.get("time") or "").strip()
+    if time_s.upper() == PLACEHOLDER_TIME:
+        warnings.append(f"time is the template placeholder {PLACEHOLDER_TIME!r}; set the face-off time the user "
+                        "gave as 24-hour HH:MM" + (" (ask if unknown)" if time_required else ", or leave it empty"))
+    elif time_s or time_required:
+        if not re.fullmatch(r"([01]?\d|2[0-3]):[0-5]\d", time_s):
+            warnings.append(f"time {data.get('time')!r} must be the face-off as 24-hour HH:MM (Helsinki time)"
+                            + ("; ask the user if unknown" if time_required else ", or empty if unknown"))
+    return day
+
+
 def validate(path: str) -> int:
     """Check a game.json or pregame.json (usually hand-written); the schema field
     tells them apart. Exit 0 when clean (a missing logo file alone is fine, and a
@@ -915,30 +949,7 @@ def validate(path: str) -> int:
     home, away = data["home"], data["away"]
     us_side = team_checks(data, cfg, warnings)
 
-    date = data.get("date")
-    try:
-        dt.datetime.strptime(str(date), "%Y-%m-%d")
-    except ValueError:
-        warnings.append(f"date {date!r} is not ISO YYYY-MM-DD")
-    manual = data.get("source") == "manual"
-    if manual and str(date) == template_date():
-        warnings.append(f"date {date} is the template's example date; set the real date of the game")
-    if manual:
-        confirmed = data.get("confirmed") if isinstance(data.get("confirmed"), list) else []
-        tpl = template_values()
-        hint = ("; set what the user said, or leave it empty if they did not say. If the user really said "
-                "this, add \"confirmed\": [\"{key}\"] to game.json")
-        arena = str(data.get("arena") or "").strip()
-        if arena and arena in tpl["arena"] and "arena" not in confirmed:
-            warnings.append(f"arena {arena!r} is the template's example value" + hint.format(key="arena"))
-        time_s = str(data.get("time") or "").strip()
-        if time_s and time_s in tpl["time"] and "time" not in confirmed:
-            warnings.append(f"time {time_s!r} is the template's example value" + hint.format(key="time"))
-        rows = period_key(data.get("periods"))
-        if rows and rows in tpl["periods"] and "periods" not in confirmed:
-            warnings.append("periods are the template's example rows; enter the period scores the user gave, "
-                            "or set periods to [] if unknown. If the user really gave exactly these, add "
-                            "\"confirmed\": [\"periods\"] to game.json")
+    date_time_checks(data, warnings, time_required=False)
 
     placeholders, empties = set(), set()
     for key in ("scorers_us", "scorers_them"):
@@ -1052,25 +1063,14 @@ def validate_pregame(path: str, data: dict) -> int:
     warnings, notes = [], []
     us_side = team_checks(data, cfg, warnings)
 
-    date = str(data.get("date") or "").strip()
-    day = None
-    try:
-        day = dt.datetime.strptime(date, "%Y-%m-%d").date()
-    except ValueError:
-        warnings.append(f"date {data.get('date')!r} is not ISO YYYY-MM-DD; set the game day")
+    day = date_time_checks(data, warnings, time_required=True)
     if day is not None:
-        if data.get("source") == "manual" and date == pregame_template_date():
-            warnings.append(f"date {date} is the template's example date; set the real game day")
         if day < helsinki_today():
             warnings.append(f"date {fi_date(day)} is in the past; a pre-game post is for an upcoming game")
         weekday = str(data.get("weekday") or "").strip()
         if weekday and weekday.upper() != weekday_code(day):
             warnings.append(f"weekday {weekday!r} does not match {fi_date(day)} ({weekday_code(day)}); "
                             "fix it or remove the key")
-    time_s = str(data.get("time") or "").strip()
-    if not re.fullmatch(r"([01]?\d|2[0-3]):[0-5]\d", time_s):
-        warnings.append(f"time {data.get('time')!r} must be the kick-off as 24-hour HH:MM (Helsinki time); "
-                        "ask the user if unknown")
     if not str(data.get("arena") or "").strip():
         warnings.append("arena is empty; ask the user where the game is played")
     if data.get("status", "scheduled") != "scheduled":
@@ -1089,6 +1089,25 @@ def no_match(what: str, seasons: list, explicit: int = None) -> str:
         msg += (f"The season may be wrong: a season is numbered by the year it ends in (2026-27 is 2027). "
                 f"Try --season {explicit - 1}, or leave --season out.\n")
     return msg + f"{MANUAL_HINT}\nRun with --list to see the III-divisioona schedule."
+
+
+def is_unplayed(g: dict) -> bool:
+    """Scheduled and the face-off still ahead: nothing to post a result of."""
+    return g.get("GameStatus") in (0, None) and not is_final(g) and game_datetime(g) > helsinki_now()
+
+
+def check_playable(g: dict, cfg: dict, allow_unfinished: bool, previous: dict = None) -> None:
+    """Post-game mode: stop (exit 2) on a game not played yet, whatever the flags,
+    and on a started game that is not final unless --allow-unfinished."""
+    if is_unplayed(g):
+        when = game_datetime(g)
+        raise Stop(f"Game {g['GameID']} has not been played yet: face-off {weekday_code(when.date())} "
+                   f"{fi_date(when.date())} at {when.strftime('%H:%M')} ({describe(g, cfg).strip()}).\n"
+                   "There is no result to post. For the game-day post, run:\n"
+                   f"  python \"{SCRIPT}\" --pregame --game-id {g['GameID']} --out pregame.json",
+                   EXIT_NOT_FINAL)
+    if not is_final(g) and not allow_unfinished:
+        raise not_final_stop(g, cfg, previous)
 
 
 def not_final_stop(g: dict, cfg: dict, previous: dict = None) -> Stop:
@@ -1153,8 +1172,7 @@ def fetch_by_id(args, cfg: dict, explicit: int) -> int:
     report, _, season = fetch_report_by_id(args, cfg, explicit, seasons)
     entry = schedule_entry(cfg, season, args.game_id)
     merged = game_from_report(report, entry)
-    if not is_final(merged) and not args.allow_unfinished:
-        raise not_final_stop(merged, cfg)
+    check_playable(merged, cfg, args.allow_unfinished)
     return write(build(merged, report, cfg, season), args.out)
 
 
@@ -1175,10 +1193,10 @@ def pregame_data(g: dict, cfg: dict, season: int, report: dict = None, entry: di
             "logo_url": f"{BASE}/images/associations/weblogos/200x200/{img}" if img else None,
         }
 
-    # The report's Arena is the rink's full name ('Ilmatar Areena' where the schedule
-    # says 'Matinkylä I'), but it may be empty before the game: then the schedule's.
-    rinks = [(report_game(report) or {}).get("Arena"), (entry or {}).get("RinkName"), g.get("RinkName")]
-    rinks = [" ".join(str(r).split()) for r in rinks if isinstance(r, str) and r.strip()]
+    # Same rule as the post-game path: the report's Arena, else the schedule's RinkName.
+    schedule_rink = (entry or {}).get("RinkName") or g.get("ScheduleRinkName")
+    if report is None:
+        schedule_rink = schedule_rink or g.get("RinkName")
     when = game_datetime(g)
     return {
         "schema": PREGAME_SCHEMA,
@@ -1191,7 +1209,7 @@ def pregame_data(g: dict, cfg: dict, season: int, report: dict = None, entry: di
         "date": when.date().isoformat(),
         "time": when.strftime("%H:%M"),
         "weekday": weekday_code(when.date()),
-        "arena": rinks[0] if rinks else "",
+        **arena_fields((report_game(report) or {}).get("Arena"), schedule_rink),
         "home": side("Home", us_home),
         "away": side("Away", not us_home),
         "us_side": "home" if us_home else "away",
@@ -1211,9 +1229,11 @@ def write_pregame(g: dict, cfg: dict, season: int, out: str, report: dict = None
     if g.get("GameStatus") not in (0, None) or game_datetime(g) <= helsinki_now():
         print(f"note: game {g['GameID']} has already started (kick-off {data['time']} on {fi_date(data['date'])}); "
               "a pre-game post normally goes out before kick-off.", file=sys.stderr)
+    add_season_index(data)
     with open(out, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
     print(pregame_line(data, "Wrote", out))
+    rink_note(data)
     if not data["arena"]:
         print("WARNING: the results service names no rink for this game; ask the user and fill in arena.")
     return 0
@@ -1329,8 +1349,7 @@ def run(args) -> int:
             raise Stop("This game report is not a game of our club.")
         if args.game_id and g["GameID"] != args.game_id:
             raise Stop(f"The report is for game {g['GameID']}, not the requested {args.game_id}.")
-        if not is_final(g) and not args.allow_unfinished:
-            raise not_final_stop(g, cfg)
+        check_playable(g, cfg, args.allow_unfinished)
         season = check_season(explicit, g)
         return write(build(g, report, cfg, season), args.out)
 
@@ -1407,8 +1426,7 @@ def run(args) -> int:
             break
     if g is None:
         raise Stop(no_match(what, [] if sources else seasons, explicit))
-    if not is_final(g) and not args.allow_unfinished:
-        raise not_final_stop(g, cfg)
+    check_playable(g, cfg, args.allow_unfinished)
 
     season = check_season(explicit, g)
     args._help_season = season
@@ -1424,10 +1442,9 @@ def run(args) -> int:
                    f"({describe(g, cfg).strip()}). Pass --game-id {report_id} to use the report's game, "
                    f"or save the report of game {g['GameID']}.")
     merged = game_from_report(report, g)
-    if not is_final(merged) and not args.allow_unfinished:
-        # The schedule may already say final while the report lags behind (or the
-        # other way round); the report is what gets written, so it decides.
-        raise not_final_stop(merged, cfg)
+    # The schedule may already say final while the report lags behind (or the
+    # other way round); the report is what gets written, so it decides.
+    check_playable(merged, cfg, args.allow_unfinished)
     return write(build(merged, report, cfg, season), args.out)
 
 
@@ -1445,7 +1462,8 @@ def main(argv=None) -> int:
                     help="list all our games of the season (scheduled ones too), newest first, "
                          "score Näädät first with the result, and exit")
     ap.add_argument("--allow-unfinished", action="store_true",
-                    help="accept a game that has started but is not marked final (exit 2 otherwise)")
+                    help="accept a game that has started but is not marked final (exit 2 otherwise). "
+                         "A game not played yet is always refused: use --pregame for it")
     ap.add_argument("--games-json", help="offline: saved response of helpers/getgames (the schedule)")
     ap.add_argument("--report-json", help="offline: saved response of gamereport/getgamereportdata")
     ap.add_argument("--pregame", action="store_true",

@@ -67,6 +67,6 @@ python SKILL_DIR/scripts/render_card.py SKILL_DIR/references/example_game.json -
 python SKILL_DIR/scripts/clean_image.py check "$OUT"/*.jpg
 ```
 
-All three should finish without errors (`--list` needs network), and every `check` line should say `CLEAN`.
+All three should finish without errors (`--list` needs network), the render should print a `photo:` line with the photographer credit and write `result_feed.jpg`, `summary_feed.jpg` and `photo_credit.txt`, and every `check` line should say `CLEAN`.
 
 On Windows (PowerShell or cmd), make any empty folder instead of using `mktemp`, for example `C:\temp\naadat-check`, and run the same three commands with that folder as the output: `--out C:\temp\naadat-check` for the render, then `check` with the file names in it (`C:\temp\naadat-check\result_feed.jpg` and so on).

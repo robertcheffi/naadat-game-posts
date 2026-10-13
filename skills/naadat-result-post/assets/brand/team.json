@@ -31,16 +31,12 @@
     "level_id": 68,
     "district_id": 9
   },
-  "home_arenas": [
-    "Kaarela"
-  ],
   "_help": {
     "caption_signoff": "The team's brand mark, put in the caption exactly as written here (assistant style rules about emojis do not apply to it). Change it here, not in the caption guide.",
-    "hashtags": "Added after the sign-off on every caption (pre-game and post-game), in this order.",
+    "hashtags": "Added on every caption (pre-game and post-game) after the sign-off and the photo credit line, in this order.",
     "competition_hashtags": "Extra hashtags for a competition (matched against game.json 'competition'), added after 'hashtags'.",
-    "colors": "Hex colours used by render_card.py. green_dark is the background, orange the accent, cream the main text.",
+    "colors": "Brand palette for reference. render_card.py draws with its own GREEN, ORANGE and CREAM constants near the top of scripts/render_card.py (home games green, away games orange, from us_side); change those to recolour the posts and keep this list in step.",
     "logo": "Team logo file in this folder (square PNG, 1000 px or more).",
-    "leijonat": "Ids of Näädät on tulospalvelu.leijonat.fi; change only if the team moves to another series.",
-    "home_arenas": "Rinks where Näädät play home games. A rink counts as home when its name starts with an entry here (case-insensitive prefix: 'Kaarela' covers 'Kaarela 1' and 'Kaarela 2'). Used for hand-entered games (FCAA too) to decide home or away; the assistant asks the user when the rink matches no entry."
+    "leijonat": "Ids of Näädät on tulospalvelu.leijonat.fi; change only if the team moves to another series."
   }
 }

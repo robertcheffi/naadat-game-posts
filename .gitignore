@@ -5,5 +5,7 @@ out/
 post/
 test/
 game.json
+pregame.json
+photo_credit.txt
 report.json
 # dist/ is committed on purpose: the upload zip is downloaded from the repo.

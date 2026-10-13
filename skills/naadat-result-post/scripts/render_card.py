@@ -1,37 +1,46 @@
 #!/usr/bin/env python3
-"""Render Instagram graphics for a game.json (post-game) or a pregame.json
-(game day), both produced by fetch_game.py or written by hand from the
-templates in references/.
+"""Render the Instagram posts (1080x1350) for a Näädät game.
 
-Look: a TV-sports match graphics package. Slanted type, chamfered panels, a
-scorebug with both logos and the score as the hero, a box score, speed lines
-and chevrons as motion cues, and the club lockup (crest + HERNESAAREN NÄÄDÄT).
+Input is a game.json (post-game) or a pregame.json (game day), both written by
+fetch_game.py or by hand from the templates in references/. The kind is
+detected from the file's schema (naadat-result-post/pregame@1 = game day).
 
-Outputs (all Instagram post size 1080x1350, metadata-free, see clean_image.py):
-  post-game (game.json, schema naadat-result-post/game@1)
-    <out>/result_feed.jpg      slide 1: FINAL, logos, score, box score, scorers
-    <out>/summary_feed.jpg     slide 2: goal log, shots, PP goals, goalie saves
-  game day (pregame.json, schema naadat-result-post/pregame@1, or --pregame)
-    <out>/pregame_feed.jpg     GAME DAY, both logos, kick-off time, date, rink
-  --story adds the 1080x1920 story version (result_story.jpg / pregame_story.jpg).
+Outputs, all 1080x1350 and metadata-free (see clean_image.py):
+  post-game   <out>/result_feed.jpg    slide 1: photo, FINAL, both logos, score,
+                                        date, rink, period scores
+              <out>/summary_feed.jpg   slide 2: score header, goal log, shots,
+                                        power-play goals, goalie saves
+                                        (skipped with a note without a goal log)
+  game day    <out>/pregame_feed.jpg   photo, GAME DAY, both logos, date,
+                                        face-off time, teams, rink
+  always      <out>/photo_credit.txt   the credit of the photo used, nothing else
+
+Look: a club poster. A home game is green, an away game orange (from
+us_side). A graded photo panel on the left, the title set vertically on the
+right, square logo tiles overlapping the photo edge with the scores beside
+them, and a ruled info row at the foot. Anton for display type, Barlow for
+text and labels.
+
+Photos come from the skill's own library (assets/photos/photos.json), never
+from the user. The pick steps through the library game by game: index =
+season_index % N, where season_index (written by fetch_game.py) is the game's
+place in the season schedule; hand-entered games use the date (days // 3).
+The game-day post is offset by two, so it differs from the result posts of
+the same and the neighbouring games. --photo-index K picks a library photo by
+hand; --photo PATH with --photo-credit uses another real photo. The script
+prints the photo, its index and the index to use for a different photo.
 
 A game that is not final is refused (exit 2) unless --allow-unfinished is
-given; that card then says LIVE / PROVISIONAL, never FINAL. Slide 2 needs a
-goal log; a hand-entered game with "goals": [] skips it with a note.
-logo_file paths are resolved relative to the folder of the JSON file.
-Everything is drawn with Pillow (8.2+) from real data, fonts and logo files.
-No generative AI image model is involved anywhere.
+given; that card then says LIVE / PROVISIONAL, never FINAL. A photo or
+logo_file that declares AI generation or editing (IPTC DigitalSourceType,
+C2PA) is refused with exit code 4. logo_file paths resolve relative to the
+folder of the JSON file. Downloaded logos are cached in the system temp
+folder, never inside --out. Everything is drawn with Pillow (8.2+) from real
+data, bundled fonts, real logo files and real photos; no generative AI.
 
-A --photo gets its own clear window at the top of slide 1, the game-day post
-and the story (title over its darkened top edge, panels below the window);
-slide 2 stays photo-free on purpose (the goal log needs a calm background). A
-photo or logo_file that declares AI generation or editing (IPTC
-DigitalSourceType, C2PA) is refused with exit code 4. Downloaded logos are
-cached in the system temp folder, never inside --out.
-
-  python render_card.py game.json --out out/
-  python render_card.py game.json --out out/ --photo team_photo.jpg
-  python render_card.py pregame.json --out out/
+  python render_card.py game.json --out post/
+  python render_card.py pregame.json --out post/
+  python render_card.py game.json --out post/ --photo-index 2
 """
 from __future__ import annotations
 
@@ -51,6 +60,7 @@ def _utf8_streams():
 _utf8_streams()
 
 import argparse  # noqa: E402
+import datetime as dt  # noqa: E402
 import json  # noqa: E402
 import os  # noqa: E402
 import random  # noqa: E402
@@ -69,11 +79,21 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 SKILL_DIR = os.path.dirname(HERE)
 ASSETS = os.path.join(SKILL_DIR, "assets")
 FONTS = os.path.join(ASSETS, "fonts")
+PHOTOS = os.path.join(ASSETS, "photos")
 sys.path.insert(0, HERE)
 import clean_image  # noqa: E402
 from clean_image import save_clean  # noqa: E402
 
+try:
+    LANCZOS = Image.Resampling.LANCZOS
+    BICUBIC = Image.Resampling.BICUBIC
+except AttributeError:  # Pillow < 9.1
+    LANCZOS = Image.LANCZOS
+    BICUBIC = Image.BICUBIC
+
 AI_REFUSAL_EXIT = 4
+EXIT_NOT_FINAL = 2
+PREGAME_SCHEMA = "naadat-result-post/pregame@1"
 # Fallback when clean_image has no ai_provenance(): byte-pattern hits that mean
 # the file declares AI generation or editing (IPTC DigitalSourceType, C2PA).
 _AI_BACKSTOP_KEYS = ("digitalsourcetype", "c2pa", "jumb", "cabx")
@@ -106,425 +126,304 @@ def load_photo(path):
         return loader(path).convert("RGB")
     return ImageOps.exif_transpose(Image.open(path)).convert("RGB")
 
+
+def load_json(path):
+    with open(path, encoding="utf-8-sig") as f:  # tolerate a UTF-8 BOM (Windows editors)
+        return json.load(f)
+
+
+# ------------------------------------------------------------------ palette
+
 W, H = 1080, 1350
-STORY_H = 1920
-SLANT = 0.21          # italic shear used for type and panel edges
-L, R = 50, 1030       # safe content edges (profile grid crops 4:5 sides)
-
-try:
-    RESAMPLE = Image.Resampling.LANCZOS
-    BICUBIC = Image.Resampling.BICUBIC
-    AFFINE = Image.Transform.AFFINE
-except AttributeError:  # Pillow < 9.1
-    RESAMPLE = Image.LANCZOS
-    BICUBIC = Image.BICUBIC
-    AFFINE = Image.AFFINE
-
-GAME_DIR = "."        # folder of game.json; relative logo_file paths resolve here
-_LOGOS = {}           # (name, is_us) -> (image, kind); one lookup and one note per team
+M = 64                     # outer margin, all four sides
+CREAM = (238, 235, 225)
+GREEN = (11, 51, 30)
+ORANGE = (247, 137, 42)
+AWAY_BG = (240, 130, 38)
 
 
-# ---------------------------------------------------------------- basics
+def mix(a, b, t):
+    return tuple(int(round(a[i] + (b[i] - a[i]) * t)) for i in range(3))
 
-def rgb(hex_color, alpha=255):
-    h = hex_color.lstrip("#")
-    return (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16), alpha)
+
+THEMES = {
+    "home": {
+        "bg": GREEN, "accent": ORANGE, "text": CREAM, "on_accent": GREEN,
+        "panel": mix(GREEN, (0, 0, 0), 0.34),        # loser / neutral tile
+        "title": mix(GREEN, (92, 178, 122), 0.52),    # vertical title, tonal
+        "board": mix(GREEN, (0, 0, 0), 0.30),         # rink-board corners
+        "contour": mix(GREEN, (90, 170, 120), 0.20),
+        "rule": mix(GREEN, CREAM, 0.24),
+        "dim": mix(GREEN, CREAM, 0.66),               # labels, assists
+        "faint": mix(GREEN, CREAM, 0.52),             # their goals, captions
+        "loser": mix(GREEN, CREAM, 0.42),             # losing score
+        "duo_dark": (4, 24, 14), "duo_light": (246, 240, 226),
+    },
+    "away": {
+        "bg": AWAY_BG, "accent": GREEN, "text": GREEN, "on_accent": ORANGE,
+        "panel": (204, 92, 12),
+        "title": (186, 74, 4),
+        "board": (214, 102, 18),
+        "contour": (250, 152, 64),
+        "rule": mix(AWAY_BG, GREEN, 0.40),
+        "dim": mix(AWAY_BG, GREEN, 0.86),
+        "faint": mix(AWAY_BG, GREEN, 0.74),
+        "loser": mix(AWAY_BG, GREEN, 0.72),
+        "duo_dark": (8, 34, 20), "duo_light": (252, 238, 220),
+    },
+}
+
+
+# ------------------------------------------------------------------ type
+
+_FC = {}
+FONT_FILES = {
+    "display": "Anton-Regular.ttf",
+    "cond": "BarlowCondensed-Medium.ttf",
+    "cond_r": "BarlowCondensed-Regular.ttf",
+    "cond_sb": "BarlowCondensed-SemiBold.ttf",
+    "cond_b": "BarlowCondensed-Bold.ttf",
+    "label": "Barlow-SemiBold.ttf",
+    "label_b": "Barlow-Bold.ttf",
+}
 
 
 def font(name, size):
-    return ImageFont.truetype(os.path.join(FONTS, name), int(size))
+    key = (name, int(size))
+    if key not in _FC:
+        _FC[key] = ImageFont.truetype(os.path.join(FONTS, FONT_FILES[name]), int(size))
+    return _FC[key]
 
 
-def anton(size):
-    return font("Anton-Regular.ttf", size)
-
-
-def barlow(size, weight="Bold"):
-    return font("BarlowCondensed-%s.ttf" % weight, size)
-
-
-def text_w(text, f, tracking=0):
-    if not text:
-        return 0
-    return f.getlength(text) + tracking * (len(text) - 1)
-
-
-def _chars(d, x, y, text, f, fill, tracking, va):
-    if not tracking:
-        d.text((x, y), text, font=f, fill=fill, anchor="l" + va)
-        return
-    for ch in text:
-        d.text((x, y), ch, font=f, fill=fill, anchor="l" + va)
-        x += f.getlength(ch) + tracking
-
-
-def draw_text(img, xy, text, f, fill, tracking=0, anchor="ls"):
-    """Draw text with letter spacing; anchor = l/m/r + baseline 's' or middle 'm'.
-
-    A fill with alpha < 255 is drawn on a transparent layer and composited, so
-    it really blends (ImageDraw on an RGBA canvas would overwrite the pixels).
-    """
+def tracked(d, xy, text, f, fill, track=0.0, anchor="ls"):
+    """Draw text with letter spacing (track in em). anchor: l?/r?/m? + baseline row."""
+    sp = f.size * track
+    widths = [f.getlength(c) for c in text]
+    total = sum(widths) + sp * max(0, len(text) - 1)
     x, y = xy
-    width = text_w(text, f, tracking)
-    if anchor[0] == "m":
-        x -= width / 2
-    elif anchor[0] == "r":
-        x -= width
-    if not text:
-        return width
-    if len(fill) < 4 or fill[3] >= 255:
-        _chars(ImageDraw.Draw(img), x, y, text, f, fill, tracking, anchor[1])
-        return width
-    s = f.size
-    top, bot = max(0, int(y - 2 * s)), min(img.height, int(y + 2 * s))
-    if bot <= top:
-        return width
-    layer = Image.new("RGBA", (img.width, bot - top), (0, 0, 0, 0))
-    _chars(ImageDraw.Draw(layer), x, y - top, text, f, tuple(fill[:3]) + (255,), tracking, anchor[1])
-    k = fill[3]
-    layer.putalpha(layer.getchannel("A").point(lambda v: v * k // 255))
-    img.alpha_composite(layer, (0, top))
-    return width
+    if anchor[0] == "r":
+        x -= total
+    elif anchor[0] == "m":
+        x -= total / 2
+    for c, w in zip(text, widths):
+        d.text((x, y), c, font=f, fill=fill, anchor="l" + anchor[1])
+        x += w + sp
+    return total
 
 
-def line(img, pts, fill, width=2):
-    """Alpha-correct line."""
-    layer = Image.new("RGBA", img.size, (0, 0, 0, 0))
-    ImageDraw.Draw(layer).line(pts, fill=fill, width=width)
-    img.alpha_composite(layer)
+def tracked_len(text, f, track):
+    return sum(f.getlength(c) for c in text) + f.size * track * max(0, len(text) - 1)
 
 
-def fit_font(text, maker, start, max_w, min_size=10, tracking=0):
-    size = start
-    while size > min_size and text_w(text, maker(size), tracking) > max_w:
-        size -= 2
-    return maker(size)
+LABEL_TRACK = 0.16
 
 
-def ink_box(f, text):
-    """Ink bbox of text relative to a left-baseline origin."""
-    return f.getbbox(text, anchor="ls")
+def label(d, xy, text, color, size=19, anchor="ls"):
+    return tracked(d, xy, text.upper(), font("label", size), color, LABEL_TRACK, anchor)
 
 
-def baseline_for_center(f, text, cy):
-    """Baseline y that puts the ink of `text` vertically centred on cy."""
-    _, t, _, b = ink_box(f, text)
-    return cy - (t + b) / 2
+def label_len(text, size):
+    return tracked_len(text.upper(), font("label", size), LABEL_TRACK)
 
 
-def slant_text(img, xy, text, f, fill, tracking=0, anchor="ls", k=SLANT, shadow=None):
-    """Draw text sheared like an italic (top leans right), about its baseline."""
-    x, yb = xy
-    _, t, _, b = ink_box(f, text)
-    pad = 30
-    top = int(yb + t - pad)
-    hgt = int(b - t + 2 * pad)
-    layer = Image.new("RGBA", (img.width, hgt), (0, 0, 0, 0))
-    d = ImageDraw.Draw(layer)
-    width = text_w(text, f, tracking)
-    if anchor[0] == "m":
-        x -= width / 2
-    elif anchor[0] == "r":
-        x -= width
-    by = yb - top
-    _chars(d, x, by, text, f, fill, tracking, anchor[1])  # transparent layer: alpha blends on composite
-    layer = layer.transform(layer.size, AFFINE, (1, k, -k * by, 0, 1, 0), resample=BICUBIC)
-    if shadow:
-        sh = Image.new("RGBA", layer.size, (0, 0, 0, 0))
-        sh.putalpha(layer.getchannel("A").point(lambda v: v * shadow[0] // 255))
-        sh = sh.filter(ImageFilter.GaussianBlur(shadow[1]))
-        _composite_at(img, sh, shadow[2], top + shadow[3])
-    _composite_at(img, layer, 0, top)
+def fit_size(text, name, start, max_w, min_size=10):
+    s = start
+    while s > min_size and font(name, s).getlength(text) > max_w:
+        s -= 1
+    return s
 
 
-def _composite_at(img, layer, x, y):
-    """alpha_composite that tolerates layers hanging off the canvas."""
-    x, y = int(x), int(y)
-    sx, sy = max(0, -x), max(0, -y)
-    if sx or sy:
-        layer = layer.crop((sx, sy, layer.width, layer.height))
-    x, y = max(0, x), max(0, y)
-    w, h = min(layer.width, img.width - x), min(layer.height, img.height - y)
-    if w <= 0 or h <= 0:
-        return
-    if (w, h) != layer.size:
-        layer = layer.crop((0, 0, w, h))
-    img.alpha_composite(layer, (x, y))
+def segs_len(segs, f):
+    return sum(f.getlength(s) for s, _ in segs)
 
 
-def para(x0, y0, x1, y1, k=SLANT, left=True, right=True):
-    """Parallelogram (top edge shifted right). left/right: slant that edge."""
-    s = k * (y1 - y0)
-    return [(x0 + (s if left else 0), y0), (x1 + (s if right else 0), y0),
-            (x1, y1), (x0, y1)]
+def draw_segs(d, xy, segs, f, anchor="ls"):
+    """Draw [(text, color), ...] as one run from xy (anchor l or r)."""
+    x, y = xy
+    if anchor[0] == "r":
+        x -= segs_len(segs, f)
+    for s, c in segs:
+        d.text((x, y), s, font=f, fill=c, anchor="l" + anchor[1])
+        x += f.getlength(s)
 
 
-def cell(x0, y0, x1, y1, k=0.17):
-    """Parallelogram kept inside x0..x1 (top edge shifted right)."""
-    sh = k * (y1 - y0)
-    return [(x0 + sh, y0), (x1, y0), (x1 - sh, y1), (x0, y1)]
+# ------------------------------------------------------------------ background
 
-
-def chamfer(x0, y0, x1, y1, c, corners="tl br"):
-    pts = []
-    pts += [(x0, y0 + c), (x0 + c, y0)] if "tl" in corners else [(x0, y0)]
-    pts += [(x1 - c, y0), (x1, y0 + c)] if "tr" in corners else [(x1, y0)]
-    pts += [(x1, y1 - c), (x1 - c, y1)] if "br" in corners else [(x1, y1)]
-    pts += [(x0 + c, y1), (x0, y1 - c)] if "bl" in corners else [(x0, y1)]
-    return pts
-
-
-def poly(img, pts, fill, shadow=None):
-    """Alpha-correct polygon, optional soft drop shadow (alpha, blur, dx, dy)."""
-    if shadow:
-        sh = Image.new("RGBA", img.size, (0, 0, 0, 0))
-        ImageDraw.Draw(sh).polygon([(x + shadow[2], y + shadow[3]) for x, y in pts],
-                                   fill=(0, 0, 0, shadow[0]))
-        img.alpha_composite(sh.filter(ImageFilter.GaussianBlur(shadow[1])))
-    layer = Image.new("RGBA", img.size, (0, 0, 0, 0))
-    ImageDraw.Draw(layer).polygon(pts, fill=fill)
-    img.alpha_composite(layer)
-
-
-def poly_mask(size, pts):
-    m = Image.new("L", size, 0)
-    ImageDraw.Draw(m).polygon(pts, fill=255)
-    return m
-
-
-def wrap_parts(parts, f, max_w, sep):
-    lines, cur = [], []
-    for p in parts:
-        trial = sep.join(cur + [p])
-        if not cur or f.getlength(trial) <= max_w:
-            cur.append(p)
-        else:
-            lines.append(cur)
-            cur = [p]
-    if cur:
-        lines.append(cur)
-    return lines
-
-
-def ellipsize(text, f, max_w):
-    if f.getlength(text) <= max_w:
-        return text
-    while text and f.getlength(text + "…") > max_w:
-        text = text[:-1]
-    return text.rstrip(" ,(") + "…" if text else ""
-
-
-# ---------------------------------------------------------------- background
-
-def noise_tile(seed, size=256):
+def grain(img, seed, amount=4):
     rng = random.Random(seed)
-    data = bytes(rng.getrandbits(8) for _ in range(size * size))
-    return Image.frombytes("L", (size, size), data)
+    n = 256
+    tile = Image.frombytes("L", (n, n), bytes(rng.randint(128 - amount * 3, 128 + amount * 3) for _ in range(n * n)))
+    tile = tile.filter(ImageFilter.GaussianBlur(0.6))
+    full = Image.new("L", (W, H))
+    for y in range(0, H, n):
+        for x in range(0, W, n):
+            full.paste(tile, (x, y))
+    noise = Image.merge("RGB", (full, full, full))
+    return ImageChops.add(img.convert("RGB"), noise, 1.0, -128)
 
 
-def grain(w, h, seed, alpha):
-    tile = noise_tile(seed)
-    grain_l = Image.new("L", (w, h))
-    for ty in range(0, h, tile.height):
-        for tx in range(0, w, tile.width):
-            grain_l.paste(tile, (tx, ty))
-    return Image.merge("RGBA", (grain_l, grain_l, grain_l, Image.new("L", (w, h), alpha)))
+def contours(t, seed):
+    """Fine topographic lines in two diagonal corners, like a printed relief map."""
+    rng = random.Random(seed)
+    gw, gh = 7, 9
+    small = Image.new("L", (gw, gh))
+    small.putdata([rng.randint(30, 225) for _ in range(gw * gh)])
+    field = small.resize((W, H), BICUBIC).filter(ImageFilter.GaussianBlur(24))
+    lines = Image.new("L", (W, H), 0)
+    for level in range(36, 230, 9):
+        b = field.point(lambda v, lv=level: 255 if v > lv else 0)
+        lines = ImageChops.lighter(lines, b.filter(ImageFilter.FIND_EDGES))
+    lines = lines.point(lambda v: 255 if v > 60 else 0).filter(ImageFilter.GaussianBlur(0.5))
+    region = Image.new("L", (W, H), 0)
+    rd = ImageDraw.Draw(region)
+    rd.ellipse((-420, 700, 520, 1640), fill=255)
+    rd.ellipse((700, -360, 1400, 420), fill=255)
+    region = region.filter(ImageFilter.GaussianBlur(110))
+    layer = Image.new("RGBA", (W, H), t["contour"] + (0,))
+    layer.putalpha(ImageChops.multiply(lines, region))
+    return layer
 
 
-def speed_lines(w, h, rng, y0, y1, side, count, colors):
-    """Horizontal streaks entering from one side, fading toward the centre."""
-    layer = Image.new("RGBA", (w, h), (0, 0, 0, 0))
-    d = ImageDraw.Draw(layer)
-    for _ in range(count):
-        y = rng.uniform(y0, y1)
-        ln = rng.uniform(140, 520)
-        th = rng.choice((2, 2, 3, 4, 6))
-        a = rng.randint(14, 46)
-        col = rgb(colors["orange"], a) if rng.random() < 0.22 else (255, 255, 255, a)
-        if side == "l":
-            x0 = rng.uniform(-60, 120)
-            pts = [(x0, y), (x0 + ln, y)]
-        else:
-            x1 = w - rng.uniform(-60, 120)
-            pts = [(x1 - ln, y), (x1, y)]
-        d.line(pts, fill=col, width=th)
-    ramp = Image.new("L", (w, 1))
-    for x in range(w):
-        t = x / (w - 1)
-        v = (1 - t) if side == "l" else t
-        ramp.putpixel((x, 0), int(255 * min(1, max(0, v * 1.6 - 0.15))))
-    ramp = ramp.resize((w, h))
-    layer.putalpha(ImageChops.multiply(layer.getchannel("A"), ramp))
-    return layer.filter(ImageFilter.GaussianBlur(0.8))
+_BG = {}
 
 
-def chevrons(img, x, y, n, size, color, step=None, thick=None, fade=True, shadow=False):
-    """Row of '>' chevrons pointing right, fading out.
-
-    shadow: a dark soft outline under the strokes, so they stay readable over a
-    busy photo."""
-    layer = Image.new("RGBA", img.size, (0, 0, 0, 0))
-    d = ImageDraw.Draw(layer)
-    step = step or size * 0.62
-    thick = thick or max(3, int(size * 0.16))
-    strokes = []
-    for i in range(n):
-        a = int(color[3] * (1 - i / max(n, 1) * 0.8)) if fade else color[3]
-        cx = x + i * step
-        pts = [(cx, y - size / 2), (cx + size * 0.45, y), (cx, y + size / 2)]
-        strokes.append((pts, a))
-        d.line(pts, fill=color[:3] + (a,), width=thick, joint="curve")
-    if shadow:
-        sh = Image.new("RGBA", img.size, (0, 0, 0, 0))
-        sd = ImageDraw.Draw(sh)
-        for pts, a in strokes:
-            sd.line([(px + 2, py + 3) for px, py in pts], fill=(0, 0, 0, min(255, 120 + a // 2)),
-                    width=thick + 6, joint="curve")
-        img.alpha_composite(sh.filter(ImageFilter.GaussianBlur(3)))
-    img.alpha_composite(layer)
+def background(theme, seed):
+    key = (theme, seed)
+    if key not in _BG:
+        t = THEMES[theme]
+        img = Image.new("RGBA", (W, H), t["bg"] + (255,))
+        img.alpha_composite(contours(t, seed))
+        # rink boards: the four rounded corners of a rink, traced inside the edge
+        band = Image.new("L", (W, H), 0)
+        ImageDraw.Draw(band).rounded_rectangle((18, 18, W - 18, H - 18), radius=120, outline=255, width=12)
+        arm = 230
+        keep = Image.new("L", (W, H), 0)
+        kd = ImageDraw.Draw(keep)
+        for x0, y0 in ((0, 0), (W - arm, 0), (0, H - arm), (W - arm, H - arm)):
+            kd.rectangle((x0, y0, x0 + arm, y0 + arm), fill=255)
+        layer = Image.new("RGBA", (W, H), t["board"] + (0,))
+        layer.putalpha(ImageChops.multiply(band, keep))
+        img.alpha_composite(layer)
+        _BG[key] = img
+    return _BG[key].copy()
 
 
-def _photo_layer(photo, w, h, colors, text_end, window_end, top=0):
-    """The photo graded toward the brand and veiled where text sits over it.
+# ------------------------------------------------------------------ photo
 
-    The photo fills the top of the frame (0..window_end + fade) in colour with a
-    light green grade. The veil is moderate behind the header text (top), light
-    in the clear photo window (text_end..window_end) and rises to solid dark
-    behind the panels below it."""
-    fade = 190
-    ph_h = int(min(h, window_end + fade)) - top
-    # cover-scale, then put the photo's middle (where the subject usually is)
-    # on the middle of the clear window rather than on the middle of the band
-    src = photo.convert("RGB")
-    scale = max(w / src.width, ph_h / src.height)
-    sw, sh_ = max(w, int(round(src.width * scale))), max(ph_h, int(round(src.height * scale)))
-    src = src.resize((sw, sh_), RESAMPLE)
-    wc = (text_end + window_end) / 2 - top
-    oy = min(0, max(ph_h - sh_, wc - sh_ * 0.5))
-    ox = (sw - w) // 2
-    ph = src.crop((ox, int(-oy), ox + w, int(-oy) + ph_h))
-    ph = ImageEnhance.Color(ph).enhance(0.88)
+def graded_photo(photo, size, focus, t):
+    """Fit the photo to size around focus and grade it toward the theme."""
+    w, h = size
+    ph = ImageOps.fit(photo, (w, h), LANCZOS, centering=focus)
+    lum = ImageOps.autocontrast(ph.convert("L"), cutoff=0.5)
+    duo = ImageOps.colorize(lum, t["duo_dark"], t["duo_light"], mid=mix(t["duo_dark"], t["duo_light"], 0.45))
+    ph = ImageEnhance.Color(ph).enhance(0.92)
+    ph = Image.blend(ph, duo, 0.24)
     ph = ImageEnhance.Contrast(ph).enhance(1.06)
-    ph = Image.blend(ph, Image.new("RGB", ph.size, rgb(colors["green"])[:3]), 0.14)
-    layer = Image.new("RGBA", (w, h), rgb(colors["green_dark"]))
-    layer.paste(ph.convert("RGBA"), (0, top))
-    veil = Image.new("L", (1, h))
-    for y in range(h):
-        if y < text_end:
-            a = 0.62 - 0.24 * (y / max(1, text_end))          # 0.62 -> 0.38 behind the header
-        elif y < window_end:
-            t = (y - text_end) / max(1, window_end - text_end)
-            a = 0.38 - 0.26 * min(1, t * 2.5)                  # clear photo window, ~0.12
-        else:
-            t = min(1, (y - window_end) / fade)
-            a = 0.12 + 0.84 * (t * t * (3 - 2 * t))             # smooth rise to solid dark
-        veil.putpixel((0, y), int(255 * a))
-    veil = veil.resize((w, h))
-    dark = Image.new("RGBA", (w, h), rgb(colors["green_dark"]))
-    return Image.composite(dark, layer, veil)
+    vig = Image.new("L", (w, h), 0)
+    ImageDraw.Draw(vig).ellipse((-w * 0.35, -h * 0.25, w * 1.35, h * 1.25), fill=255)
+    vig = ImageOps.invert(vig.filter(ImageFilter.GaussianBlur(120))).point(lambda v: int(v * 0.35))
+    return Image.composite(Image.new("RGB", (w, h), t["duo_dark"]), ph, vig)
 
 
-def background(w, h, colors, seed, photo=None, hero=(0.45,), photo_window=None, photo_top=0):
-    """Brand background. photo: a PIL image; photo_window = (text_end, window_end)."""
-    rng = random.Random(seed)
-    base = Image.new("RGBA", (w, h), rgb(colors["green_dark"]))
-    if photo is not None:
-        text_end, window_end = photo_window or (int(h * 0.22), int(h * 0.40))
-        base = _photo_layer(photo, w, h, colors, text_end, window_end, photo_top)
+def photo_library():
+    path = os.path.join(PHOTOS, "photos.json")
+    try:
+        lib = load_json(path)
+    except (OSError, ValueError) as exc:
+        sys.exit("photo library missing or unreadable: %s (%s)" % (path, exc))
+    if not isinstance(lib, list) or not lib:
+        sys.exit("photo library is empty: %s" % path)
+    return lib
+
+
+def stable_key(game):
+    """A number that steps by one from one game to the next, so the photo rotates.
+
+    fetch_game.py writes season_index (the game's place in our season schedule).
+    Hand-entered games fall back to the date: games are rarely under three days
+    apart, so days // 3 also advances by about one per game.
+    """
+    idx = game.get("season_index")
+    if isinstance(idx, int) and idx >= 0:
+        return idx
+    try:
+        return dt.date.fromisoformat(str(game.get("date"))).toordinal() // 3
+    except ValueError:
+        return zlib.crc32(json.dumps(game, sort_keys=True, default=str).encode("utf-8"))
+
+
+def pick_photo(game, pregame, args):
+    """(path, credit, focus) of the photo for this post."""
+    if args.photo:
+        return args.photo, args.photo_credit.strip(), (0.5, 0.4)
+    lib = photo_library()
+    if args.photo_index is not None:
+        if not 0 <= args.photo_index < len(lib):
+            sys.exit("--photo-index must be 0..%d; the library has: %s"
+                     % (len(lib) - 1, ", ".join("%d=%s" % (i, e.get("file")) for i, e in enumerate(lib))))
+        i = args.photo_index
     else:
-        glow = Image.new("L", (w, h), 0)
-        gd = ImageDraw.Draw(glow)
-        for cyf in hero:
-            cx, cy, r = w * 0.5, h * cyf, w * 0.95
-            for i in range(40, 0, -1):
-                rr = r * i / 40
-                gd.ellipse((cx - rr, cy - rr * 0.55, cx + rr, cy + rr * 0.55),
-                           fill=int(200 * (1 - i / 40) ** 1.3))
-        glow = glow.filter(ImageFilter.GaussianBlur(60))
-        mid = Image.new("RGBA", (w, h), rgb(colors["green_mid"]))
-        base = Image.composite(mid, base, glow)
-    del rng
-
-    shards = Image.new("RGBA", (w, h), (0, 0, 0, 0))
-    sd = ImageDraw.Draw(shards)
-    sd.polygon([(w * 0.58, 0), (w * 1.0, 0), (w * 1.0, h * 0.10), (w * 0.30, h)], fill=(255, 255, 255, 7))
-    sd.polygon([(w * 0.70, 0), (w * 0.78, 0), (w * 0.40, h), (w * 0.32, h)], fill=(255, 255, 255, 6))
-    sd.polygon([(-w * 0.1, h * 0.70), (w * 0.38, h * 0.70 - w * 0.48 * 0.6), (w * 0.44, h * 0.70 - w * 0.48 * 0.6),
-                (-w * 0.04, h * 0.70 + 40)], fill=rgb(colors["orange"], 10))
-    base = Image.alpha_composite(base, shards)
-
-    scan = Image.new("RGBA", (w, h), (0, 0, 0, 0))
-    scd = ImageDraw.Draw(scan)
-    for y in range(0, h, 6):
-        scd.line([(0, y), (w, y)], fill=(0, 0, 0, 22), width=2)
-    base = Image.alpha_composite(base, scan)
-    base = Image.alpha_composite(base, grain(w, h, seed, 11))
-
-    vig = Image.new("L", (w, h), 255)
-    ImageDraw.Draw(vig).ellipse((-w * 0.3, -h * 0.12, w * 1.3, h * 1.12), fill=0)
-    vig = vig.filter(ImageFilter.GaussianBlur(110))
-    base = Image.composite(Image.new("RGBA", (w, h), (0, 0, 0, 95 if photo is not None else 150)), base, vig)
-    return base
+        i = (stable_key(game) + (2 if pregame else 0)) % len(lib)
+    e = lib[i]
+    focus = e.get("focus") or [0.5, 0.4]
+    pick_photo.index = (i, len(lib))
+    return os.path.join(PHOTOS, e["file"]), str(e.get("credit") or "").strip(), (float(focus[0]), float(focus[1]))
 
 
-def add_speed(img, colors, seed, y0, y1, count=26):
-    rng = random.Random(seed * 7 + 3)
-    img.alpha_composite(speed_lines(img.width, img.height, rng, y0, y1, "l", count, colors))
-    img.alpha_composite(speed_lines(img.width, img.height, rng, y0, y1, "r", count, colors))
+# ------------------------------------------------------------------ logos & tiles
+
+GAME_DIR = "."        # folder of the JSON file; relative logo_file paths resolve here
+_LOGOS = {}           # (name, is_us) -> (image or None, kind); one lookup and one note per team
+CFG = {}
 
 
-def hem(img, colors, seed, top):
-    """Full-bleed jersey hem: orange band with cream and dark stripes.
-
-    top=True fills y 0..STORY_HEM (under the Instagram story header);
-    top=False mirrors it exactly at the bottom (under the reply bar)."""
-    w, h = img.size
-    o, c, g = rgb(colors["orange"]), rgb(colors["cream"]), rgb(colors["green_dark"])
-    # (height, colour) from the outer edge inwards
-    bands = [(None, o), (16, c), (20, g), (34, o), (10, c)]
-    outer = STORY_HEM - sum(b for b, _ in bands[1:])   # same height top and bottom
-    layer = Image.new("RGBA", (w, h), (0, 0, 0, 0))
-    d = ImageDraw.Draw(layer)
-    if top:
-        y = 0
-        for hh, col in bands:
-            hh = outer if hh is None else hh
-            d.rectangle((0, y, w, y + hh - 1), fill=col)
-            y += hh
-    else:
-        y = h
-        for hh, col in bands:
-            hh = outer if hh is None else hh
-            d.rectangle((0, y - hh, w, y - 1), fill=col)
-            y -= hh
-    # knit texture and a soft shade so the band reads as fabric, not a flat fill
-    tex = grain(w, h, seed + 99, 26)
-    tex.putalpha(ImageChops.multiply(tex.getchannel("A"), layer.getchannel("A")))
-    shade = Image.new("RGBA", (w, h), (0, 0, 0, 0))
-    sd = ImageDraw.Draw(shade)
-    for x in range(-h, w, 18):
-        sd.line([(x, 0), (x + h * 0.21, h)], fill=(0, 0, 0, 14), width=6)
-    shade.putalpha(ImageChops.multiply(shade.getchannel("A"), layer.getchannel("A")))
-    img.alpha_composite(layer)
-    img.alpha_composite(shade)
-    img.alpha_composite(tex)
+def lum(c):
+    return 0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2]
 
 
-# ---------------------------------------------------------------- logos
+def strip_white(logo):
+    """Remove a white background connected to the logo's edge (club PNGs often have one)."""
+    im = logo.convert("RGBA")
+    im.thumbnail((400, 400), LANCZOS)
+    w, h = im.size
+    a = im.getchannel("A")
+    border = [a.getpixel((x, y)) for x in range(0, w, 4) for y in (0, h - 1)] + \
+             [a.getpixel((x, y)) for y in range(0, h, 4) for x in (0, w - 1)]
+    if sum(1 for v in border if v < 16) > len(border) * 0.5:
+        return im                     # already cut out: leave it as the club made it
+    px = im.load()
+    seen = bytearray(w * h)
+    stack = [(x, y) for x in range(w) for y in (0, h - 1)] + [(x, y) for y in range(h) for x in (0, w - 1)]
+    while stack:
+        x, y = stack.pop()
+        i = y * w + x
+        if seen[i]:
+            continue
+        r, g, b, al = px[x, y]
+        if al > 0 and min(r, g, b) < 225:
+            continue
+        seen[i] = 1
+        px[x, y] = (r, g, b, 0)
+        for nx, ny in ((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)):
+            if 0 <= nx < w and 0 <= ny < h and not seen[ny * w + nx]:
+                stack.append((nx, ny))
+    a = im.getchannel("A").filter(ImageFilter.MinFilter(3)).filter(ImageFilter.GaussianBlur(0.7))
+    im.putalpha(a)
+    return im
 
-def logo_image(team, cache_dir, colors, cfg):
-    """Return (RGBA image, kind) with kind in brand | logo | badge."""
+
+def team_logo(team):
+    """(RGBA image or None, kind) with kind in brand | logo | badge."""
     key = (team.get("name"), bool(team.get("is_us")))
-    if key in _LOGOS:
-        return _LOGOS[key]
-    _LOGOS[key] = res = _find_logo(team, cache_dir, colors, cfg)
-    return res
+    if key not in _LOGOS:
+        _LOGOS[key] = _find_logo(team)
+    return _LOGOS[key]
 
 
-def _find_logo(team, cache_dir, colors, cfg):
+def _find_logo(team):
     name = team.get("name") or "opponent"
     if team.get("is_us"):
-        p = os.path.join(ASSETS, "brand", cfg["logo"])
+        p = os.path.join(ASSETS, "brand", CFG.get("logo") or "naadat_n_logo.png")
         return Image.open(p).convert("RGBA"), "brand"
     candidates = []
     lf = team.get("logo_file")
@@ -539,30 +438,31 @@ def _find_logo(team, cache_dir, colors, cfg):
     for c in candidates:
         if os.path.exists(c):
             try:
-                return Image.open(c).convert("RGBA"), "logo"
+                return strip_white(Image.open(c)), "logo"
             except Exception as exc:  # noqa: BLE001
                 print("warning: could not read logo %s: %s" % (c, exc), file=sys.stderr)
     url = team.get("logo_url")
     if url:
         try:
-            os.makedirs(cache_dir, exist_ok=True)
-            dest = os.path.join(cache_dir, "logo_%s.png" % (team.get("association_id") or "opp"))
+            cache = os.path.join(tempfile.gettempdir(), "naadat-result-post-logos")
+            os.makedirs(cache, exist_ok=True)
+            dest = os.path.join(cache, "logo_%s.png" % (team.get("association_id") or zlib.crc32(url.encode())))
             req = urllib.request.Request(url, headers={"user-agent": "naadat-result-post/1.0"})
             with urllib.request.urlopen(req, timeout=20) as r, open(dest, "wb") as f:
                 f.write(r.read())
             marks = ai_marks(dest)
             if marks:
                 raise ValueError("downloaded logo declares AI provenance (%s)" % "; ".join(marks))
-            return Image.open(dest).convert("RGBA"), "logo"
+            return strip_white(Image.open(dest)), "logo"
         except Exception as exc:  # noqa: BLE001  fall back to a badge, but say so
             print("warning: could not download logo %s: %s" % (url, exc), file=sys.stderr)
-    print("note: no logo for %s, using a lettered badge" % name)
-    return monogram(name, colors), "badge"
+    print("note: no logo for %s, using a lettered badge" % name, file=sys.stderr)
+    return None, "badge"
 
 
 def abbrev(name):
     """2-3 letter badge text. Never a single letter (a lone O reads as a zero)."""
-    words = ["".join(ch for ch in w if ch.isalpha()) for w in name.replace("-", " ").split()]
+    words = ["".join(ch for ch in w if ch.isalpha()) for w in (name or "").replace("-", " ").split()]
     words = [w for w in words if w]
     if not words:
         return "OPP"
@@ -576,134 +476,146 @@ def abbrev(name):
     return out if len(out) >= 2 else "OPP"
 
 
-def monogram(name, colors):
-    """Lettered badge for an opponent with no logo: cream plate, slanted letters."""
-    s = 600
-    im = Image.new("RGBA", (s, s), rgb(colors["cream"]))
-    d = ImageDraw.Draw(im)
-    ink = (34, 38, 36, 255)
-    d.line(chamfer(34, 34, s - 34, s - 34, 70) + [(34, 104)], fill=ink, width=10)
-    letters = abbrev(name)
-    f = fit_font(letters, anton, 300, s - 170)
-    _, t, _, b = ink_box(f, letters)
-    slant_text(im, (s / 2 - 12, s / 2 - (t + b) / 2), letters, f, ink, 0, "ms", k=0.14)
-    return im
-
-
-def tile_image(logo, kind, s):
-    """Square tile with the logo on it (white tile for opponent logos)."""
+def tile(img, team, x, y, s, fill, t):
+    """Square logo tile. Our crest is itself an orange tile, so it fills the tile."""
+    d = ImageDraw.Draw(img)
+    logo, kind = team_logo(team)
     if kind == "brand":
-        return ImageOps.fit(logo, (s, s), RESAMPLE)
-    if kind == "badge":
-        return logo.resize((s, s), RESAMPLE)
-    tile = Image.new("RGBA", (s, s), (255, 255, 255, 255))
-    pad = int(s * 0.08)
+        if fill == ORANGE:
+            img.alpha_composite(logo.resize((s, s), LANCZOS), (x, y))
+        else:
+            d.rectangle((x, y, x + s - 1, y + s - 1), fill=fill)
+            inset = int(s * 0.08)
+            img.alpha_composite(logo.resize((s - 2 * inset, s - 2 * inset), LANCZOS), (x + inset, y + inset))
+        if t["bg"] != GREEN and fill != GREEN:
+            # orange crest on an orange page: a green keyline keeps it a tile
+            d.rectangle((x, y, x + s - 1, y + s - 1), outline=GREEN, width=3)
+        return
+    d.rectangle((x, y, x + s - 1, y + s - 1), fill=fill)
+    if logo is None:
+        letters = abbrev(team.get("name"))
+        f = font("display", int(s * 0.42))
+        while f.getlength(letters) > s * 0.76 and f.size > 12:
+            f = font("display", f.size - 2)
+        d.text((x + s / 2, y + s / 2), letters, font=f, fill=t["text"] if fill != t["accent"] else t["on_accent"],
+               anchor="mm")
+        return
     lg = logo.copy()
-    lg.thumbnail((s - 2 * pad, s - 2 * pad), RESAMPLE)
-    tile.alpha_composite(lg, ((s - lg.width) // 2, (s - lg.height) // 2))
-    return tile
+    box = int(s * 0.74)
+    lg.thumbnail((box, box), LANCZOS)
+    if lg.width < box and lg.height < box:
+        k = box / max(lg.size)
+        lg = lg.resize((max(1, int(lg.width * k)), max(1, int(lg.height * k))), LANCZOS)
+    # low contrast against the tile? give the logo a crisp cream die-cut edge
+    a = lg.getchannel("A")
+    rgb_b, a_b = lg.convert("RGB").tobytes(), a.tobytes()
+    px = [tuple(rgb_b[3 * i:3 * i + 3]) for i in range(len(a_b)) if a_b[i] > 128]
+    low = sum(1 for p in px if abs(lum(p) - lum(fill)) < 55) / max(1, len(px))
+    if low > 0.35:
+        edge = a.filter(ImageFilter.MaxFilter(9)).filter(ImageFilter.GaussianBlur(0.6))
+        cut = Image.new("RGBA", lg.size, CREAM + (0,))
+        cut.putalpha(edge)
+        pad = Image.new("RGBA", lg.size, (0, 0, 0, 0))
+        pad.alpha_composite(cut)
+        pad.alpha_composite(lg)
+        lg = pad
+    img.alpha_composite(lg, (x + (s - lg.width) // 2, y + (s - lg.height) // 2))
 
 
-def logo_tile(img, logo, kind, box, colors, cut=None, shadow=True, keyline=None):
-    """Logo on a chamfered square tile. box = (x, y, size).
-
-    The club's own (orange) tile gets a cream keyline so it never fuses with an
-    orange score cell next to it."""
-    x, y, s = box
-    x, y, s = int(x), int(y), int(s)
-    cut = int(s * 0.13) if cut is None else cut
-    pts = chamfer(0, 0, s - 1, s - 1, cut)
-    if shadow:
-        sh = Image.new("RGBA", img.size, (0, 0, 0, 0))
-        ImageDraw.Draw(sh).polygon([(px + x + 8, py + y + 16) for px, py in pts], fill=(0, 0, 0, 140))
-        img.alpha_composite(sh.filter(ImageFilter.GaussianBlur(16)))
-    if keyline is None:
-        keyline = max(2, round(s * 0.035)) if kind == "brand" else 0
-    if keyline:
-        plate = Image.new("RGBA", (s, s), rgb(colors["cream"]))
-        img.paste(plate, (x, y), poly_mask((s, s), pts))
-        gap = max(1, keyline // 2)  # thin dark line inside the cream one
-        inner = s - 2 * keyline
-        dark = Image.new("RGBA", (inner, inner), rgb(colors["green_dark"]))
-        img.paste(dark, (x + keyline, y + keyline),
-                  poly_mask((inner, inner), chamfer(0, 0, inner - 1, inner - 1, max(2, cut - keyline))))
-        x, y, s = x + keyline + gap, y + keyline + gap, inner - 2 * gap
-        cut = max(2, cut - keyline - gap)
-        pts = chamfer(0, 0, s - 1, s - 1, cut)
-    tile = tile_image(logo, kind, s)
-    img.paste(tile, (x, y), poly_mask((s, s), pts))
-
-
-def small_logo(img, logo, kind, x, y, s, colors):
-    logo_tile(img, logo, kind, (x, y, s), colors, cut=max(4, s // 6), shadow=False,
-              keyline=(2 if kind == "brand" else 0))
-
-
-def lockup(img, cfg, colors, x, cy, crest, size, handle=False, anchor="l"):
-    """Club lockup: crest + HERNESAAREN NÄÄDÄT in tracked caps (+ handle below)."""
-    name = (cfg.get("full_name") or cfg["display_name"]).upper()
-    nf = barlow(size, "ExtraBoldItalic")
-    hf = barlow(int(size * 0.86), "ExtraBoldItalic")
-    tw = text_w(name, nf, 5)
-    if handle:
-        tw = max(tw, text_w(cfg["instagram"].upper(), hf, 4))
-    total = crest + 18 + tw
-    x0 = x if anchor == "l" else x - total
-    brand, _ = logo_image({"name": cfg["display_name"], "is_us": True}, None, colors, cfg)
-    logo_tile(img, brand, "brand", (x0, cy - crest / 2, crest), colors, cut=max(4, crest // 6), shadow=False,
-              keyline=max(2, crest // 22))
-    tx = x0 + crest + 18
-    if handle:
-        _, t1, _, b1 = ink_box(nf, "H")
-        _, t2, _, b2 = ink_box(hf, "H")
-        gap = size * 0.34
-        blk = (b1 - t1) + gap + (b2 - t2)
-        y1 = cy - blk / 2 - t1
-        draw_text(img, (tx, y1), name, nf, rgb(colors["cream"]), 5)
-        draw_text(img, (tx, y1 + (b1 - t1) + gap + (b2 - t2)), cfg["instagram"].upper(), hf,
-                  rgb(colors["orange"]), 4)
-    else:
-        draw_text(img, (tx, baseline_for_center(nf, "H", cy)), name, nf, rgb(colors["cream"]), 5)
-    return x0, x0 + total
-
-
-# ---------------------------------------------------------------- data helpers
+# ------------------------------------------------------------------ game facts
 
 DOW = ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"]
-TYPE_LABEL = {"PP": "PP", "SH": "SH", "EN": "EN", "PS": "PS", "YV": "PP", "AV": "SH", "TM": "EN"}
+DOW_LONG = ["MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY", "SATURDAY", "SUNDAY"]
 
 
-def date_label(iso):
-    import datetime as dt
+def date_parts(iso):
+    """(weekday index or None, '18.10.', '18.10.2026') for an ISO date."""
     try:
-        d = dt.date(*[int(p) for p in str(iso)[:10].split("-")])
+        y, m, d = (int(v) for v in str(iso)[:10].split("-"))
+        return dt.date(y, m, d).weekday(), "{}.{}.".format(d, m), "{}.{}.{}".format(d, m, y)
     except (TypeError, ValueError):
-        return str(iso or "").upper()
-    return "%s %d.%d.%d" % (DOW[d.weekday()], d.day, d.month, d.year)
+        return None, str(iso or ""), str(iso or "")
 
 
-def game_seed(game):
-    gid = str(game.get("game_id") or game.get("date") or "0")
-    return int(gid) if gid.isdigit() else zlib.crc32(gid.encode("utf-8"))
+def goals_of(team):
+    try:
+        return int(team.get("goals") or 0)
+    except (TypeError, ValueError):
+        return 0
 
 
-def name_of(n, style="short"):
-    """Display a name object that may carry only 'last' (hand-entered games)."""
-    if isinstance(n, str):
-        return n
-    n = n or {}
-    last = (n.get("last") or "").strip()
-    first = (n.get("first") or "").strip()
-    full = (n.get("full") or "").strip()
-    if style == "last":
-        return last or full or "?"
-    short = (n.get("short") or "").strip()
-    if short:
-        return short
-    if first and last:
-        return "%s. %s" % (first[0], last)
-    return last or full or "?"
+def is_final(game):
+    """True for a finished game. A file without 'status' counts as final when it carries a result."""
+    st = game.get("status")
+    if st is None:
+        return bool((game.get("result") or "").strip())
+    return str(st).lower() == "final"
 
+
+def winner_side(game):
+    """'home', 'away' or None (tie or not final). game['result'] wins over goals."""
+    if not is_final(game):
+        return None
+    if "result" in game:
+        r = (game.get("result") or "").upper()
+        us = game.get("us_side", "home")
+        if r in ("W", "OTW", "SOW"):
+            return us
+        if r in ("L", "OTL", "SOL"):
+            return "away" if us == "home" else "home"
+        return None
+    h, a = goals_of(game["home"]), goals_of(game["away"])
+    if h == a:
+        return None
+    return "home" if h > a else "away"
+
+
+def finish_word(game):
+    fin = (game.get("finish") or "").upper()
+    return fin if fin in ("OT", "SO") else ""
+
+
+def status_segs(game, t, color):
+    """'FULL TIME · OVERTIME' (OT part in accent), or PROVISIONAL for a game not final."""
+    if not is_final(game):
+        return [("PROVISIONAL", color)]
+    fin = finish_word(game)
+    segs = [("FULL TIME", color)]
+    if fin:
+        segs.append((" · " + {"OT": "OVERTIME", "SO": "SHOOTOUT"}[fin], t["accent"]))
+    return segs
+
+
+def period_rows(game):
+    """[(label, 'h–a', is_extra)] from game['periods'], in order."""
+    out = []
+    for p in game.get("periods") or []:
+        try:
+            hs, as_ = int(p.get("home")), int(p.get("away"))
+        except (TypeError, ValueError):
+            continue
+        lbl = str(p.get("label") or "").upper()
+        extra = lbl in ("OT", "SO", "4", "5", "JA", "VL")
+        if lbl in ("4", "JA"):
+            lbl = "OT"
+        elif lbl in ("5", "VL"):
+            lbl = "SO"
+        out.append((lbl, "{}–{}".format(hs, as_), extra))
+    return out
+
+
+def period_segs(game, t, color):
+    segs = []
+    for i, (lbl, sc, extra) in enumerate(period_rows(game)):
+        if i:
+            segs.append(("   ", color))
+        if extra:
+            segs.append((lbl + " ", t["accent"]))
+        segs.append((sc, color))
+    return segs
+
+
+# ------------------------------------------------------------------ names
 
 def _clashes(game):
     """{(team, last name)} where two different players of one team share a last name."""
@@ -717,1288 +629,597 @@ def _clashes(game):
             seen.setdefault(key, set()).add((n.get("full") or n.get("first") or "").strip().lower())
 
     for g in game.get("goals") or []:
-        t = g.get("team")
-        add(t, g.get("scorer"))
+        add(g.get("team"), g.get("scorer"))
         for a in g.get("assists") or []:
-            add(t, a)
-    for key, team in (("scorers_us", "us"), ("scorers_them", "them")):
-        for r in game.get(key) or []:
-            add(team, r.get("name"))
+            add(g.get("team"), a)
     game["_clash"] = {k for k, v in seen.items() if len(v) > 1}
     return game["_clash"]
 
 
-def brief_name(n, game, team):
-    """Short name for assists and slide-1 scorers: the data's 'display' form when
-    present (it already tells siblings apart), else the last name, or the short
-    form ('J. Taivalmaa') when a teammate shares that last name."""
-    if isinstance(n, dict) and (n.get("display") or "").strip():
-        return n["display"].strip()
-    last = name_of(n, "last")
-    if isinstance(n, dict) and (team, last.lower()) in _clashes(game):
-        return name_of(n)
-    return last
+def _short(n):
+    first, last = (n.get("first") or "").strip(), (n.get("last") or "").strip()
+    if first and last:
+        return "{}. {}".format(first[0], last)
+    return (n.get("short") or "").strip() or last or (n.get("full") or "").strip()
 
 
-def goals_of(r):
-    try:
-        return int(r.get("goals") or 0)
-    except (TypeError, ValueError):
-        return 0
+def log_name(n, game, team, scorer):
+    """Scorer: 'I. Koskimäki'; assist: 'Koskimäki'. When the data's 'display' form is
+    disambiguated ('Justus Taivalmaa', 'N. Raassina'), that form is used as is."""
+    if isinstance(n, str):
+        return n.strip() or "?"
+    n = n or {}
+    last = (n.get("last") or "").strip()
+    disp = (n.get("display") or "").strip()
+    if disp and last and disp.lower() != last.lower():
+        return disp
+    if not disp and last and (team, last.lower()) in _clashes(game):
+        full = (n.get("full") or "").strip()
+        return full or _short(n)
+    if scorer:
+        return _short(n) or disp or "?"
+    return disp or last or (n.get("full") or "").strip() or "?"
 
 
-def scorer_parts(game):
-    parts = []
-    for r in game.get("scorers_us") or []:
-        g = goals_of(r)
-        if g > 0:
-            parts.append((brief_name(r.get("name"), game, "us"), g))
-    return parts
+def assist_names(g, game):
+    """Assist names; an assist that would read like the scorer gets its fuller form."""
+    team = g.get("team")
+    sc = g.get("scorer") or {}
+    sc_last = (sc.get("last") or "").strip().lower() if isinstance(sc, dict) else ""
+    out = []
+    for a in g.get("assists") or []:
+        nm = log_name(a, game, team, False)
+        if isinstance(a, dict) and sc_last and nm.lower() == sc_last:
+            # same last name as the scorer: never let it read as a self-assist
+            nm = (a.get("full") or "").strip() or _short(a) or nm
+        if nm and nm != "?":
+            out.append(nm)
+    return out
 
 
-def us_team(game):
-    return game["home"] if game.get("us_side") == "home" else game["away"]
+def last_name(n):
+    if isinstance(n, str):
+        return n
+    n = n or {}
+    return (n.get("display") or "").strip() or (n.get("last") or "").strip() or (n.get("full") or "").strip() or "?"
 
 
-def them_team(game):
-    return game["away"] if game.get("us_side") == "home" else game["home"]
+# ------------------------------------------------------------------ shared pieces
+
+PHOTO = (M, 116, 676, 1132)          # photo panel
+TILE = 172                           # logo tile edge
+TILE_X = 598                         # tiles overlap the photo's right edge
+TILE_Y2 = PHOTO[3] - TILE + 18       # lower tile drops 18 px below the photo
+TILE_Y1 = TILE_Y2 - TILE - 14
+SCORE_X = TILE_X + TILE + 34
+GRID = [M, 360, TILE_X]              # info row columns when the content allows
+INFO_Y = 1196
+TITLE_GAP = 44                       # vertical title foot to upper tile row
 
 
-def side_shots(game):
-    shots = game.get("shots")
-    if not shots or shots.get("us") is None or shots.get("them") is None:
-        return None
-    if game.get("us_side") == "home":
-        return shots["us"], shots["them"]
-    return shots["them"], shots["us"]
+def vertical_title(img, parts, x_right, y_top, max_len, max_w):
+    """Title rotated to read bottom-to-top, right edge on the margin. parts = [(text, color)]."""
+    f = font("display", 300)
+    gap = f.getlength(" ")
+    total = sum(f.getlength(p) for p, _ in parts) + gap * (len(parts) - 1)
+    tmp = Image.new("RGBA", (int(total) + 40, 460), (0, 0, 0, 0))
+    d = ImageDraw.Draw(tmp)
+    x = 10
+    for p, c in parts:
+        d.text((x, 40), p, font=f, fill=c + (255,))
+        x += f.getlength(p) + gap
+    tmp = tmp.crop(tmp.getbbox())
+    k = min(max_len / tmp.width, max_w / tmp.height)
+    tmp = tmp.resize((int(tmp.width * k), int(tmp.height * k)), LANCZOS)
+    rot = tmp.rotate(90, expand=True)
+    img.alpha_composite(rot, (x_right - rot.width, y_top))
+    return rot.size
 
 
-def period_label(lbl):
-    return {"1": "1ST", "2": "2ND", "3": "3RD"}.get(str(lbl), str(lbl).upper())
+def top_row(img, t, left, right_segs):
+    d = ImageDraw.Draw(img)
+    base = M + 14
+    if left:
+        w = label(d, (M, base), left, t["text"], 22)
+        d.rectangle((M, base + 14, M + min(40, w), base + 18), fill=t["accent"])
+    f = font("label", 22)
+    x = W - M
+    for s, c in reversed(right_segs):
+        x -= tracked(d, (x, base), s.upper(), f, c, LABEL_TRACK, "rs")
+        x -= f.size * LABEL_TRACK
 
 
-def winner_side(game):
-    """'home', 'away' or None (tie or not final). game['result'] wins over goals."""
-    if not is_final(game):
-        return None
-    if "result" in game:
-        r = (game.get("result") or "").upper()
-        if not r:
-            return None
-        us = game.get("us_side", "home")
-        if r in ("W", "OTW", "SOW"):
-            return us
-        if r in ("L", "OTL", "SOL"):
-            return "away" if us == "home" else "home"
-        return None
-    h, a = game["home"]["goals"], game["away"]["goals"]
-    if h == a:
-        return None
-    return "home" if h > a else "away"
+def info_row(img, t, cols, y):
+    """Ruled row of LABEL / value columns. cols = [(label, segs)], segs = [(text, color)].
+
+    Columns sit on the poster grid when their content fits it; otherwise they are
+    packed by content width with a fixed gutter, and the type shrinks if needed."""
+    d = ImageDraw.Draw(img)
+    d.line((M, y, W - M, y), fill=t["rule"], width=2)
+    cols = [(lab, segs) for lab, segs in cols if segs and "".join(s for s, _ in segs).strip()]
+    if not cols:
+        return
+    gutter, lab_size = 52, 17
+    size = 38
+    while True:
+        f = font("cond_sb", size)
+        widths = [max(label_len(lab, lab_size), segs_len(segs, f)) for lab, segs in cols]
+        grid = GRID[:len(cols)]
+        ok = all(grid[i] + widths[i] + gutter <= (grid[i + 1] if i + 1 < len(cols) else W - M + gutter)
+                 for i in range(len(cols)))
+        if ok:
+            xs = grid
+            break
+        if sum(widths) + gutter * (len(cols) - 1) <= W - 2 * M:
+            xs, x = [], M
+            for wdt in widths:
+                xs.append(x)
+                x += wdt + gutter
+            break
+        if size <= 22:
+            xs = grid
+            break
+        size -= 1
+    for x, (lab, segs) in zip(xs, cols):
+        label(d, (x, y + 40), lab, t["dim"], lab_size)
+        draw_segs(d, (x, y + 86), segs, f)
 
 
-def is_final(game):
-    """True for a finished game. A file without 'status' (older hand-entered
-    games) counts as final when it carries a result."""
-    st = game.get("status")
-    if st is None:
-        return bool((game.get("result") or "").strip())
-    return str(st).lower() == "final"
+def fit_display(txt, max_w, max_h, start=260):
+    """Largest Anton size whose ink box fits max_w x max_h."""
+    s = start
+    while s > 20:
+        f = font("display", s)
+        l_, t_, r_, b_ = f.getbbox(txt, anchor="ls")
+        if r_ - l_ <= max_w and b_ - t_ <= max_h:
+            return f
+        s -= 2
+    return font("display", s)
 
 
-def slide_title(game):
-    """Big header word of slide 1: FINAL only for a finished game."""
-    return "FINAL" if is_final(game) else "LIVE"
-
-
-def result_tag(game):
-    """(text, kind) for the result tag under the title, or None.
-
-    Every finished result is labelled (WIN / OT LOSS / LOSS ...); a game that is
-    not final gets a neutral PROVISIONAL tag instead."""
-    if not is_final(game):
-        return ("PROVISIONAL", "neutral")
-    r = (game.get("result") or "").upper()
-    return {"W": ("WIN", "win"), "OTW": ("OVERTIME WIN", "win"), "SOW": ("SHOOTOUT WIN", "win"),
-            "L": ("LOSS", "loss"), "OTL": ("OT LOSS", "loss"), "SOL": ("SO LOSS", "loss")}.get(r)
-
-
-def is_loss(game):
-    return (game.get("result") or "").upper() in ("L", "OTL", "SOL")
-
-
-def accent(game, colors, alpha=255):
-    """Colour of the result accents (OT/SO badge, underline, chevrons, bug stripe).
-
-    Rule: orange is the club colour and here means "celebrate". It is used on
-    wins and on neutral cards (no result yet). On every loss card (L, OTL, SOL)
-    these accents are cream, so no orange ever celebrates a loss. Every loss
-    carries a cream tag ('LOSS', 'OT LOSS', 'SO LOSS'), so the tag slot means
-    the same thing on every card."""
-    return rgb(colors["cream"] if is_loss(game) else colors["orange"], alpha)
-
-
-def score_style(game, side, colors):
-    """Fill, digit colour and sheen of a score cell.
-
-    Orange only when Näädät win; an opponent win is cream with dark digits;
-    the losing cell is dark and muted; ties and unfinished games are neutral."""
-    win = winner_side(game)
-    if win is None:
-        return (255, 255, 255, 24), rgb(colors["cream"]), False
-    if win == side:
-        if game[side].get("is_us"):
-            return rgb(colors["orange"]), rgb(colors["green_dark"]), True
-        return rgb(colors["cream"]), rgb(colors["green_dark"]), True
-    return (255, 255, 255, 12), rgb(colors["cream"], 118), False
-
-
-def name_color(game, side, colors):
-    win = winner_side(game)
-    return rgb(colors["cream"]) if win in (None, side) else rgb(colors["cream"], 170)
-
-
-def table_labels(pairs, maker, start, max_w, min_px=28, tracking=2):
-    """Labels + ONE font for the rows of a table (box score, stats strip, bug).
-
-    pairs: [(full_label, short_label)]. A row keeps its full label when it fits
-    at min_px or more, else it switches to the short label (the abbreviation the
-    box score uses). All rows then share the largest size at which every label
-    fits, so the rows read as one table."""
-    labels = []
-    for full, short in pairs:
-        f = fit_font(full, maker, start, max_w, min_px, tracking)
-        labels.append(full if text_w(full, f, tracking) <= max_w else short)
-    size = start
-    while size > 12 and any(text_w(t, maker(size), tracking) > max_w for t in labels):
-        size -= 2
-    return labels, maker(size)
-
-
-def _two_line_split(text):
-    """Best break of a long team name into two lines (at a space or after a hyphen)."""
-    best = None
-    for i, ch in enumerate(text):
-        if ch == " ":
-            a, b = text[:i], text[i + 1:]
-        elif ch == "-":
-            a, b = text[:i + 1], text[i + 1:]
-        else:
-            continue
-        a, b = a.strip(), b.strip()
-        if a and b and (best is None or max(len(a), len(b)) < max(len(best[0]), len(best[1]))):
-            best = (a, b)
-    return list(best) if best else None
-
-
-def name_labels(game, cfg, cache_dir, maker, start, max_w, min_px, tracking=2, two_lines=True, shared=True):
-    """Team name labels (home, away) for a row that sits next to the team's tile.
-
-    Like table_labels, but a team shown with a lettered badge never falls back
-    to its abbreviation (the badge already shows those letters): it keeps the
-    full name, on two lines when that is what makes it fit. Returns
-    ([[line, ...], [line, ...]], font). With shared=False the font is a
-    [home_font, away_font] pair: a long two-line badge name then does not
-    shrink the other team's name with it."""
-    per = []
-    for sd in ("home", "away"):
-        team = game[sd]
-        full = (team.get("name") or "Opponent").upper()
-        badge = (not team.get("is_us")) and logo_image(team, cache_dir, game["_colors"], cfg)[1] == "badge"
-        if text_w(full, maker(min_px), tracking) <= max_w:
-            per.append([full])
-        elif not badge:
-            per.append([short_label(team, cfg)])
-        else:
-            split = _two_line_split(full) if two_lines else None
-            per.append(split or [full])
-    def fit(groups):
-        size = start
-        while size > 12 and any(text_w(t, maker(size), tracking) > max_w for ls in groups for t in ls):
-            size -= 2
-        return maker(size)
-
-    if shared:
-        return per, fit(per)
-    return per, [fit([ls]) for ls in per]
-
-
-def draw_label(img, x, cy, lines, f, fill, tracking=2, anchor="l"):
-    """One- or two-line label with its ink block centred on cy."""
-    _, t, _, b = ink_box(f, "NA")
-    cap = b - t
-    gap = cap * 0.32
-    block = cap * len(lines) + gap * (len(lines) - 1)
-    bl = cy - block / 2 - t
-    for ln in lines:
-        draw_text(img, (x, bl), ln, f, fill, tracking, anchor + "s")
-        bl += cap + gap
-
-
-def short_label(team, cfg):
-    if team.get("is_us"):
-        return (cfg.get("short_name") or cfg["display_name"]).upper()
-    return abbrev(team.get("name") or "Opponent")
-
-
-def team_label(team, cfg):
-    return (cfg["display_name"] if team.get("is_us") else team.get("name") or "Opponent").upper()
-
-
-# ---------------------------------------------------------------- pieces
-
-def header(img, title, game, colors, cfg, top, size, tag=True, right_top=None, scrim=False, inline_tag=False,
-           meta=None, tag_value=None):
-    """Slanted giant title, result tag under it, date / competition / venue on the right.
-
-    scrim: soft dark plate behind the right-hand text and shadowed chevrons
-    (used over a photo). inline_tag: compact header, the result tag sits next
-    to the title instead of under it (photo layouts)."""
-    date_txt = date_label(game.get("date"))
-    comp = (game.get("competition") or "").upper()
-    arena = (game.get("arena") or "").upper()
-    att = game.get("attendance")
-    rmax = 340
-    rlines = [(date_txt, barlow(44, "SemiBold"), rgb(colors["cream"]), 2)]
-    if meta is not None:            # caller-made right column (game-day post)
-        rlines, comp, arena, att = list(meta), "", "", None
-    if comp:
-        rlines.append((comp, fit_font(comp, lambda s: barlow(s, "ExtraBoldItalic"), 36, rmax, 22, 3),
-                       rgb(colors["orange"]), 3))
-    if arena:
-        rlines.append((arena, fit_font(arena, lambda s: barlow(s, "SemiBold"), 30, rmax, 20, 2),
-                       rgb(colors["cream"], 200), 2))
-    if att:
-        rlines.append(("ATTENDANCE %s" % att, barlow(26, "SemiBold"), rgb(colors["cream"], 160), 3))
-    rcol = max([text_w(t, f, tr) for t, f, _, tr in rlines] or [0])
-    rt = (top + 4) if right_top is None else right_top
-    if scrim and rlines:
-        rh = sum(ink_box(f, "H")[3] - ink_box(f, "H")[1] + 14 for _, f, _, _ in rlines)
-        sc = Image.new("RGBA", img.size, (0, 0, 0, 0))
-        ImageDraw.Draw(sc).rounded_rectangle((R - rcol - 40, rt - 26, R + 40, rt + rh + 22), 30,
-                                             fill=rgb(colors["green_dark"], 150))
-        img.alpha_composite(sc.filter(ImageFilter.GaussianBlur(22)))
-    y = rt
-    for t, f, col, tr in rlines:
-        _, a, _, b = ink_box(f, "H")
-        y += (b - a)
-        draw_text(img, (R, y), t, f, col, tr, "rs")
-        y += 14
-
-    rt_tag = tag_value or (result_tag(game) if tag else None)
-    badge = "" if rt_tag else {"OT": "OT", "SO": "SO"}.get(game.get("finish"), "")
-    avail = R - rcol - 40 - L
-
-    def tag_dims(cap):
-        text = rt_tag[0]
-        th = max(46, int(cap * (0.46 if inline_tag else 0.34)))
-        tf = anton(int(th * 0.62))
-        return th, tf, text_w(text, tf, 4) + 56
-
-    def measure(sz):
-        f = anton(sz)
-        _, t, _, b = ink_box(f, title)
-        cap = b - t
-        tw = text_w(title, f, 6) + SLANT * cap
-        bw = 0
-        if badge:
-            bw = text_w(badge, anton(int(cap * 0.42)), 3) + 44 + 26 + SLANT * cap * 0.56
-        elif rt_tag and inline_tag:
-            th, _, tw2 = tag_dims(cap)
-            bw = 40 + tw2 + SLANT * th
-        return f, cap, tw, tw + bw
-
-    f, cap, tw, total = measure(size)
-    while total > avail and size > 60:
-        size -= 4
-        f, cap, tw, total = measure(size)
-    yb = top + cap
-    slant_text(img, (L, yb), title, f, rgb(colors["cream"]), 6, "ls", shadow=(150, 14, 6, 10))
-    if badge:
-        x = L + tw + 26
-        bf = anton(int(cap * 0.42))
-        bw = text_w(badge, bf, 3) + 44
-        bh = cap * 0.56
-        by = yb - bh
-        poly(img, para(x, by, x + bw, yb), accent(game, colors), shadow=(120, 8, 4, 6))
-        slant_text(img, (x + bw / 2 + SLANT * bh / 2, baseline_for_center(bf, badge, by + bh / 2)),
-                   badge, bf, rgb(colors["green_dark"]), 3, "ms")
-    ry = yb + 26
-    chev_shadow = scrim  # over a photo the chevrons get a dark outline
-    if rt_tag:
-        text, kind = rt_tag
-        th, tf, tw2 = tag_dims(cap)
-        tx = L
-        if inline_tag:          # compact header: tag sits on the title baseline
-            tx, ry = L + tw + 40, yb - th
-        fill = rgb(colors["orange"]) if kind == "win" else rgb(colors["cream"])
-        poly(img, para(tx, ry, tx + tw2, ry + th), fill, shadow=(120, 8, 4, 6))
-        slant_text(img, (tx + tw2 / 2 + SLANT * th / 2, baseline_for_center(tf, text, ry + th / 2)),
-                   text, tf, rgb(colors["green_dark"]), 4, "ms")
-        room = (R - rcol - 40) - (tx + tw2 + SLANT * th + 34)
-        n_chev = 5 if not inline_tag else min(4, int((room - 20) // 19))
-        if n_chev >= 2:
-            chevrons(img, tx + tw2 + 34, ry + th / 2, n_chev, 26, accent(game, colors, 220), step=19, thick=5,
-                     shadow=chev_shadow)
-        bottom = ry + th
+def draw_score(img, txt, x, cy, f, color, outline, t):
+    """Score digits, ink centred on cy. A losing score is set as an outline."""
+    d = ImageDraw.Draw(img)
+    l_, t_, r_, b_ = f.getbbox(txt, anchor="ls")
+    base = cy - (t_ + b_) / 2
+    if outline:
+        d.text((x - l_, base), txt, font=f, fill=t["bg"], anchor="ls", stroke_width=7, stroke_fill=color)
     else:
-        poly(img, para(L, ry, L + 230, ry + 10), accent(game, colors))
-        chevrons(img, L + 262, ry + 5, 5, 22, accent(game, colors, 220), step=17, thick=5, shadow=chev_shadow)
-        bottom = ry + 10
-    return max(bottom, y - 14)
+        d.text((x - l_, base), txt, font=f, fill=color, anchor="ls")
 
 
-def score_cell(img, game, side, pts, hgt, max_w, size_k=0.78):
-    colors = game["_colors"]
-    fill, ink, sheen = score_style(game, side, colors)
-    poly(img, pts, fill)
-    ky0, ky1 = min(p[1] for p in pts), max(p[1] for p in pts)
-    if sheen:
-        sh = Image.new("RGBA", img.size, (255, 255, 255, 0))
-        ImageDraw.Draw(sh).rectangle((0, ky0, img.width, ky0 + (ky1 - ky0) * 0.42), fill=(255, 255, 255, 26))
-        sh.putalpha(ImageChops.multiply(sh.getchannel("A"), poly_mask(img.size, pts)))
-        img.alpha_composite(sh)
-    cx = (min(p[0] for p in pts) + max(p[0] for p in pts)) / 2
-    txt = str(game[side]["goals"])
-    f = fit_font(txt, anton, int(hgt * size_k), max_w)
-    slant_text(img, (cx, baseline_for_center(f, txt, (ky0 + ky1) / 2)), txt, f, ink, 0, "ms", k=0.12)
+def photo_panel(img, t, photo, focus):
+    x0, y0, x1, y1 = PHOTO
+    img.paste(graded_photo(photo, (x1 - x0, y1 - y0), focus, t), (x0, y0))
 
 
-def scorebug_h(img, game, colors, cfg, cache_dir, y0, hgt=250, names=True):
-    """Hero scorebug: [logo][score] [score][logo] across x 50..1030."""
+def weekday_title(i, style="short"):
+    if i is None:
+        return ""
+    return (DOW if style == "short" else DOW_LONG)[i]
+
+
+# ------------------------------------------------------------------ result card
+
+def result_card(game, photo, focus):
+    theme = "away" if game.get("us_side") == "away" else "home"
+    t = THEMES[theme]
+    img = background(theme, 11)
+    photo_panel(img, t, photo, focus)
+    final = is_final(game)
+    fin = finish_word(game)
+    parts = [("FINAL" if final else "LIVE", t["title"])]
+    if final and fin:
+        parts.append((fin, t["accent"]))
+    vertical_title(img, parts, W - M, PHOTO[1], TILE_Y1 - TITLE_GAP - PHOTO[1], W - M - PHOTO[2] - 34)
+
     home, away = game["home"], game["away"]
-    lh, kh = logo_image(home, cache_dir, colors, cfg)
-    la, ka = logo_image(away, cache_dir, colors, cfg)
-    y1 = y0 + hgt
-    pad = 12
-    # tiles stop growing at 292 px: a taller (sparse-card) bug gives the extra
-    # height to the score cells instead of squeezing them between huge tiles
-    s = min(hgt - 2 * pad, 292)
-    poly(img, chamfer(L, y0, R, y1, 34), (4, 16, 9, 235), shadow=(170, 22, 0, 18))
-    poly(img, [(L + 34, y0), (R, y0), (R, y0 + 5), (L + 29, y0 + 5)], accent(game, colors))
-    lx, rx = L + pad, R - pad - s
-    ty = y0 + (hgt - s) / 2
-    logo_tile(img, lh, kh, (lx, ty, s), colors, shadow=False)
-    logo_tile(img, la, ka, (rx, ty, s), colors, shadow=False)
-    gap = 22
-    mid = (L + R) / 2
-    sx0, sx1 = lx + s + gap, rx - gap
-    ky0, ky1 = y0 + pad, y1 - pad
-    sk = 0.17
-    shh = sk * (ky1 - ky0)
-    score_cell(img, game, "home", cell(sx0, ky0, mid + shh / 2 - 9, ky1, sk), hgt, (sx1 - sx0) / 2 - 70)
-    score_cell(img, game, "away", cell(mid - shh / 2 + 9, ky0, sx1, ky1, sk), hgt, (sx1 - sx0) / 2 - 70)
-    if not names:
-        return y1
-    tf = barlow(24, "Bold")
-    ty = y1 + 42
-    draw_text(img, (L + 8, ty), "HOME", tf, rgb(colors["orange"]), 5, "ls")
-    draw_text(img, (R - 8, ty), "AWAY", tf, rgb(colors["orange"]), 5, "rs")
-    ny = ty + 66
-    labels, nfs = name_labels(game, cfg, cache_dir, lambda z: barlow(z, "ExtraBoldItalic"), 60, 430, 36,
-                              two_lines=False, shared=False)
-    for (side, x, anc), label, nf in zip((("home", L + 6, "ls"), ("away", R - 6, "rs")), labels, nfs):
-        draw_text(img, (x, ny), label[0], nf, name_color(game, side, colors), 2, anc)
-    return ny + 4
-
-
-def scorebug_v(img, game, colors, cfg, cache_dir, y0, row_h=232, gap=18):
-    """Story scorebug: two stacked team rows, [logo][tag+name][score]."""
-    y = y0
-    for side, tag in (("home", "HOME"), ("away", "AWAY")):
-        team = game[side]
-        win = winner_side(game) == side
-        y1 = y + row_h
-        poly(img, chamfer(L, y, R, y1, 30), (4, 16, 9, 235), shadow=(160, 20, 0, 16))
-        if win and team.get("is_us"):
-            poly(img, [(L + 30, y), (R, y), (R, y + 5), (L + 25, y + 5)], rgb(colors["orange"]))
-        pad = 12
-        s = row_h - 2 * pad
-        lg, kind = logo_image(team, cache_dir, colors, cfg)
-        logo_tile(img, lg, kind, (L + pad, y + pad, s), colors, shadow=False)
-        cw = 290
-        pts = cell(R - pad - cw, y + pad, R - pad, y1 - pad, 0.17)
-        score_cell(img, game, side, pts, row_h, cw - 70, size_k=0.76)
-        nx = L + pad + s + 34
-        maxw = (R - pad - cw - 30) - nx
-        label = team["name"].upper()
-        nf = fit_font(label, lambda z: barlow(z, "ExtraBoldItalic"), 88, maxw, tracking=2)
-        tf = barlow(28, "Bold")
-        _, nt, _, nb = ink_box(nf, label)
-        _, tt, _, tb = ink_box(tf, tag)
-        block = (tb - tt) + 18 + (nb - nt)
-        top0 = y + row_h / 2 - block / 2
-        draw_text(img, (nx + 2, top0 - tt), tag, tf, rgb(colors["orange"]), 6, "ls")
-        draw_text(img, (nx, top0 + (tb - tt) + 18 - nt), label, nf, name_color(game, side, colors), 2, "ls")
-        y = y1 + gap
-    return y - gap
-
-
-def box_score(img, game, colors, cfg, cache_dir, x0, x1, y0, row_h=84, head_h=50):
-    """Box score: per-period goals, total and shots, one row per team.
-
-    Digits are sized from row_h (row_h 80 -> ~41 px cap height at 1080 width)."""
-    periods = game.get("periods") or []
-    shots = side_shots(game)
-    if not periods and not shots:
-        return y0
-    cols = [(period_label(p.get("label", i + 1)), "p", i) for i, p in enumerate(periods)]
-    cols.append(("T", "t", None))
-    if shots:
-        cols.append(("SHOTS", "s", None))
-    unit = row_h * 1.3
-    widths = [{"p": unit, "t": unit * 1.12, "s": unit * 1.5}[k] for _, k, _ in cols]
-    room = (x1 - x0) - 18 - max(300, row_h * 3.4)  # keep space for logo + team name
-    if sum(widths) > room:
-        widths = [w_ * room / sum(widths) for w_ in widths]
-    total_w = sum(widths)
-    y1 = y0 + head_h + 2 * row_h + 6
-    poly(img, chamfer(x0, y0, x1, y1, 22), (4, 16, 9, 228), shadow=(150, 18, 0, 14))
-    poly(img, chamfer(x0, y0, x1, y0 + head_h, 22, "tl"), (255, 255, 255, 16))
-    hf = barlow(int(head_h * 0.58), "Bold")
-    hb = baseline_for_center(hf, "H", y0 + head_h / 2)
-    draw_text(img, (x0 + 28, hb), "BOX SCORE", hf, rgb(colors["orange"]), 5)
-    cx = x1 - total_w - 18
-    col_x = []
-    for (lab, kind, _), wdt in zip(cols, widths):
-        col_x.append((cx, cx + wdt))
-        draw_text(img, (cx + wdt / 2, hb), lab, hf,
-                  rgb(colors["orange"]) if kind == "t" else rgb(colors["cream"], 190), 3, "ms")
-        cx += wdt
-    for (lab, kind, _), (a, b) in zip(cols, col_x):
-        if kind == "t":
-            poly(img, [(a + 6, y0 + head_h), (b - 6, y0 + head_h), (b - 6, y1 - 8), (a + 6, y1 - 8)],
-                 (255, 255, 255, 20))
+    hg, ag = goals_of(home), goals_of(away)
     win = winner_side(game)
-    ls = int(row_h * 0.68)
-    nmax = col_x[0][0] - (x0 + 24 + ls + 18) - 14
-    labels, nfs = name_labels(game, cfg, cache_dir, lambda z: barlow(z, "Bold"), int(row_h * 0.5), nmax, 28,
-                              shared=False)
-    df = barlow(int(row_h * 0.72), "SemiBold")
-    tfnt = barlow(int(row_h * 0.78), "ExtraBold")
-    for r, side in enumerate(("home", "away")):
-        team = game[side]
-        ry = y0 + head_h + 3 + r * row_h
-        if r == 1:
-            line(img, [(x0 + 24, ry), (x1 - 24, ry)], (255, 255, 255, 34), 2)
-        lg, kind = logo_image(team, cache_dir, colors, cfg)
-        small_logo(img, lg, kind, x0 + 24, ry + (row_h - ls) / 2, ls, colors)
-        nx = x0 + 24 + ls + 18
-        label = labels[r]
-        cy = ry + row_h / 2
-        draw_label(img, nx, cy, label, nfs[r], name_color(game, side, colors), 2)
-        for (lab, kind, i), (a, b) in zip(cols, col_x):
-            if kind == "p":
-                v, f, col = str(periods[i].get(side, "")), df, rgb(colors["cream"], 235)
-            elif kind == "t":
-                v, f = str(team["goals"]), tfnt
-                if win is None:
-                    col = rgb(colors["cream"])
-                elif win == side:
-                    col = rgb(colors["orange"]) if team.get("is_us") else rgb(colors["cream"])
-                else:
-                    col = rgb(colors["cream"], 150)
-            else:
-                v, f, col = str(shots[0] if side == "home" else shots[1]), df, rgb(colors["cream"], 235)
-            draw_text(img, ((a + b) / 2, baseline_for_center(f, "0", cy)), v, f, col, 0, "ms")
-    return y1
+    # one size for both scores, so 9 and 18 stand on the same body; the ink is kept
+    # 36 px short of the row pitch so stacked digits never touch (9 over 8 is not 98)
+    pitch = TILE_Y2 - TILE_Y1
+    f = None
+    for txt in (str(hg), str(ag)):
+        cand = fit_display(txt, W - M - SCORE_X - 6, pitch - 36)
+        if f is None or cand.size < f.size:
+            f = cand
+    for team, side, y, own in ((home, "home", TILE_Y1, hg), (away, "away", TILE_Y2, ag)):
+        won = win == side
+        lost = win is not None and not won
+        tile(img, team, TILE_X, y, TILE, t["accent"] if won else t["panel"], t)
+        color = t["accent"] if won else (t["loser"] if lost else t["text"])
+        draw_score(img, str(own), SCORE_X, y + TILE / 2, f, color, lost, t)
 
-
-def scorers_panel(img, game, colors, cfg, x0, x1, y0, max_lines=3, size=46, min_h=0):
-    """Näädät goal scorers ('Kuosmanen 3 · Ahola 2'); goalie line when no goals."""
-    parts = scorer_parts(game)
-    us_goals = us_team(game)["goals"]
-    gk = [g for g in game.get("goalies") or [] if g.get("is_us") and g.get("saves") is not None]
-    if not parts and (us_goals or not gk):
-        return y0  # unknown (hand-entered game without scorers): leave it out rather than guess
-    us_name = cfg["display_name"].upper()
-    label = "%s GOALS" % us_name if parts else "%s SAVES" % us_name
-    tx0 = x0 + 30
-    tx1 = x1 - 30
-    sep = "  ·  "
-    missing = us_goals - sum(c for _, c in parts) if parts else 0
-    if parts:
-        tokens = ["%s %d" % (n, c) if c > 1 else n for n, c in parts]
-        if missing > 0:
-            # hand-entered game with only some scorers known: say so, never imply
-            # the listed players scored every goal
-            tokens.append("+%d more" % missing)
-        while True:
-            f = barlow(size, "SemiBold")
-            lines = wrap_parts(tokens, f, tx1 - tx0, sep)
-            if len(lines) <= max_lines or size <= 30:
-                break
-            size -= 2
-        lines = lines[:max_lines]
-    else:
-        f = barlow(size, "SemiBold")
-        lines = [["%s %d" % (name_of(g.get("name"), "last"), g["saves"]) for g in gk]]
-        # one short line: size the panel to it instead of a mostly empty full-width bar
-        need = f.getlength("  ·  ".join(lines[0])) + 60 + 40
-        lw_ = text_w(label, barlow(30, "ExtraBoldItalic"), 4) + 62 + 110
-        x1 = min(x1, x0 + max(need, lw_, 420))
-        tx1 = x1 - 30
-    tab_h = 50
-    line_h = int(size * 1.22)
-    body_top = y0 + tab_h + 26
-    y1 = max(body_top + line_h * len(lines) + 14, y0 + min_h)
-    poly(img, chamfer(x0, y0 + tab_h / 2, x1, y1, 22, "br"), (4, 16, 9, 215), shadow=(140, 18, 0, 14))
-    lf = barlow(30, "ExtraBoldItalic")
-    lw = text_w(label, lf, 4) + 62
-    poly(img, para(x0, y0, x0 + lw, y0 + tab_h), rgb(colors["orange"]), shadow=(110, 8, 3, 6))
-    draw_text(img, (x0 + 24, baseline_for_center(lf, label, y0 + tab_h / 2)), label, lf,
-              rgb(colors["green_dark"]), 4)
-    chevrons(img, x0 + lw + 30, y0 + tab_h / 2 + 2, 3, 20, rgb(colors["orange"], 200), step=15, thick=4)
-    y = body_top + size * 0.82
-    dot = rgb(colors["orange"])
-    fb = barlow(size, "ExtraBold")
-    for ln in lines:
-        x = tx0
-        for i, tok in enumerate(ln):
-            if i:
-                draw_text(img, (x, y), sep, f, dot)
-                x += f.getlength(sep)
-            head, _, tail = tok.rpartition(" ")
-            if tok.startswith("+"):
-                draw_text(img, (x, y), tok, f, rgb(colors["cream"], 165))
-                x += f.getlength(tok)
-            elif tail.isdigit() and head:
-                draw_text(img, (x, y), head + " ", f, rgb(colors["cream"]))
-                x += f.getlength(head + " ")
-                draw_text(img, (x, y), tail, fb, dot)
-                x += fb.getlength(tail)
-            else:
-                draw_text(img, (x, y), tok, f, rgb(colors["cream"]))
-                x += f.getlength(tok)
-        y += line_h
-    return y1
-
-
-def footer(img, game, colors, cfg, y):
-    """Rule, club lockup (crest + HERNESAAREN NÄÄDÄT) left, handle right."""
-    line(img, [(L, y - 46), (R, y - 46)], (255, 255, 255, 40), 2)
-    poly(img, para(L, y - 49, L + 120, y - 43), rgb(colors["orange"]))
-    handle = cfg["instagram"].upper()
-    hf = barlow(32, "ExtraBoldItalic")
-    hw = text_w(handle, hf, 3)
-    _, t, _, b = ink_box(hf, "H")
-    cy = y + (t + b) / 2
-    lockup(img, cfg, colors, L, cy, 48, 30)
-    draw_text(img, (R, y), handle, hf, rgb(colors["orange"]), 3, "rs")
-    chevrons(img, R - hw - 54, cy, 2, 18, rgb(colors["orange"], 230), step=13, thick=4, fade=False)
-
-
-# ---------------------------------------------------------------- slides
-
-def _layout(free_total, n_blocks, want_window, min_gap, max_gap):
-    """Split free height into gaps (+ a clear photo window). Returns (gap, window, lead)."""
-    window = min(want_window, max(0, free_total - min_gap * (n_blocks + 1.3)))
-    gap = (free_total - window) / (n_blocks + 1.3)
-    gap = max(min_gap * 0.6, min(gap, max_gap))
-    rest = free_total - window - gap * (n_blocks + 1.3)
-    if want_window:
-        window += max(0, rest)          # photo: every spare pixel shows the photo
-        lead = gap * 1.3 + window
-    else:
-        lead = gap * 1.3 + max(0, rest) / 2   # no photo: centre the block
-    return gap, window, lead
-
-
-def result_slide(game, cfg, cache_dir, photo=None, height=H):
-    """Slide 1. height=H: 4:5 feed. height=STORY_H: dedicated 9:16 story layout."""
-    if height > H:
-        return _result_story(game, cfg, cache_dir, photo)
-    if photo is not None:
-        return _result_feed_photo(game, cfg, cache_dir, photo)
-    colors = cfg["colors"]
-    seed = game_seed(game)
-    title = slide_title(game)
-    scratch = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-    hb = header(scratch, title, game, colors, cfg, top=66, size=204)
-    content_end = 1206  # footer rule at 1250, baseline 1296
-    has_box = bool(game.get("periods") or side_shots(game))
-    box_h = box_score(scratch, game, colors, cfg, cache_dir, L, R, 0) if has_box else 0
-    # a sparse card (no box score) gets bigger scorer type instead of empty bands
-    sc_size = 46 if has_box else 58
-    sc_h = scorers_panel(scratch, game, colors, cfg, L, R, 0, max_lines=2, size=sc_size)
-    blocks = [b for b in (box_h, sc_h) if b]
-    # A sparse game (no box score) uses the stacked two-row scorebug, which
-    # grows into the height a single row would leave as empty bands.
-    rgap = 18
-    for hgt in (range(300, 199, -4) if has_box else range(316, 159, -4)):
-        bug_h = hgt + 112 if has_box else 2 * hgt + rgap
-        free = content_end - hb - bug_h - sum(blocks)
-        if free >= 46 * (len(blocks) + 1.3):
-            break
-    gap, _, lead = _layout(free, len(blocks), 0, 46, 72 if has_box else 96)
-    if not has_box:   # sparse card: no extra air above the bug, centre the rest
-        lead = gap + max(0, free - gap * (len(blocks) + 1)) / 2
-    y0 = hb + lead
-    img = background(W, H, colors, seed, None, hero=(0.40,))
-    header(img, title, game, colors, cfg, top=66, size=204)
-    if has_box:
-        add_speed(img, colors, seed, y0 + 10, y0 + hgt - 10)
-        y = scorebug_h(img, game, colors, cfg, cache_dir, y0, hgt)
-        y = box_score(img, game, colors, cfg, cache_dir, L, R, y + gap)
-    else:
-        add_speed(img, colors, seed, y0 - 20, y0 + bug_h + 20, count=30)
-        y = scorebug_v(img, game, colors, cfg, cache_dir, y0, row_h=hgt, gap=rgap)
-    if sc_h:
-        scorers_panel(img, game, colors, cfg, L, R, y + gap, max_lines=2, size=sc_size)
-    footer(img, game, colors, cfg, 1296)
+    wd, short, full = date_parts(game.get("date"))
+    top_row(img, t, game.get("competition") or "", status_segs(game, t, t["text"]))
+    date_txt = ("{} {}".format(weekday_title(wd).title(), full)).strip()
+    info_row(img, t, [("DATE", [(date_txt, t["text"])]),
+                      ("ARENA", [(game.get("arena") or "", t["text"])]),
+                      ("PERIODS", period_segs(game, t, t["text"]))], INFO_Y)
     return img
 
 
-def _result_feed_photo(game, cfg, cache_dir, photo):
-    """Slide 1 with a photo: the photo gets its own clear window.
+# ------------------------------------------------------------------ pregame card
 
-    A compact header (smaller title, tag beside it) sits over the darkened top
-    edge of the photo, the window below it stays uncovered, and the scorebug,
-    box score and scorers start under the window. With a box score the team
-    names under the scorebug are left out (the box score names both teams)."""
-    colors = cfg["colors"]
-    seed = game_seed(game)
-    title = slide_title(game)
-    scratch = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-    head_kw = dict(top=48, size=150, scrim=True, inline_tag=True)
-    hb = header(scratch, title, game, colors, cfg, **head_kw)
-    content_end = 1206
-    has_box = bool(game.get("periods") or side_shots(game))
-    box_rh, box_hh = 72, 46
-    box_h = box_score(scratch, game, colors, cfg, cache_dir, L, R, 0, row_h=box_rh, head_h=box_hh) if has_box else 0
-    sc_h = scorers_panel(scratch, game, colors, cfg, L, R, 0, max_lines=2, size=44)
-    blocks = [b for b in (box_h, sc_h) if b]
-    names = not has_box
-    min_gap, want = 26, 400
-    for hgt in range(250, 179, -4):
-        bug_h = hgt + (112 if names else 0)
-        free = content_end - hb - bug_h - sum(blocks)
-        if free - want >= min_gap * len(blocks):
-            break
-    window = free - min_gap * len(blocks)
-    gap = min_gap
-    if window > 470:                      # a sparse card: share the surplus
-        extra = window - 470
-        gap = min(60, min_gap + extra / max(1, len(blocks) + 1))
-        window = free - gap * len(blocks)
-    y0 = hb + window
-    img = background(W, H, colors, seed, photo, photo_window=(hb, y0))
-    header(img, title, game, colors, cfg, **head_kw)
-    add_speed(img, colors, seed, y0 + 10, y0 + hgt - 10)
-    y = scorebug_h(img, game, colors, cfg, cache_dir, y0, hgt, names=names)
-    if has_box:
-        y = box_score(img, game, colors, cfg, cache_dir, L, R, y + gap, row_h=box_rh, head_h=box_hh)
-    if sc_h:
-        scorers_panel(img, game, colors, cfg, L, R, y + gap, max_lines=2, size=44)
-    footer(img, game, colors, cfg, 1296)
+def pregame_card(game, photo, focus):
+    theme = "away" if game.get("us_side") == "away" else "home"
+    t = THEMES[theme]
+    img = background(theme, 12)
+    photo_panel(img, t, photo, focus)
+    vertical_title(img, [("GAME DAY", t["title"])], W - M, PHOTO[1], TILE_Y1 - TITLE_GAP - PHOTO[1],
+                   W - M - PHOTO[2] - 34)
+
+    home, away = game["home"], game["away"]
+    for team, y in ((home, TILE_Y1), (away, TILE_Y2)):
+        tile(img, team, TILE_X, y, TILE, t["accent"] if team.get("is_us") else t["panel"], t)
+    d = ImageDraw.Draw(img)
+    wd, short, full = date_parts(game.get("date"))
+    avail = W - M - SCORE_X
+    label(d, (SCORE_X, TILE_Y1 + 40), weekday_title(wd, "long") or "DATE", t["dim"], 19)
+    f = font("display", fit_size(short, "display", 92, avail))
+    d.text((SCORE_X, TILE_Y1 + TILE - 14), short, font=f, fill=t["text"], anchor="ls")
+    label(d, (SCORE_X, TILE_Y2 + 40), "FACE-OFF", t["dim"], 19)
+    tm = (game.get("time") or "").strip() or "TBA"
+    f = font("display", fit_size(tm, "display", 92, avail))
+    d.text((SCORE_X, TILE_Y2 + TILE - 14), tm, font=f, fill=t["accent"], anchor="ls")
+
+    top_row(img, t, game.get("competition") or "",
+            [("HOME GAME" if theme == "home" else "AWAY GAME", t["text"])])
+    info_row(img, t, [("HOME", [(home.get("name") or "", t["text"])]),
+                      ("AWAY", [(away.get("name") or "", t["text"])]),
+                      ("ARENA", [(game.get("arena") or "", t["text"])])], INFO_Y)
     return img
 
 
-STORY_HEM = 232     # top and bottom hem height (mirrored)
+# ------------------------------------------------------------------ summary card
+
+def period_name(p):
+    return {1: "1ST PERIOD", 2: "2ND PERIOD", 3: "3RD PERIOD", 4: "OVERTIME"}.get(p, "PERIOD {}".format(p))
 
 
-def _result_story(game, cfg, cache_dir, photo=None):
-    colors = cfg["colors"]
-    seed = game_seed(game)
-    title = slide_title(game)
-    lock_cy, head_top = 318, 396    # key content starts below y~270 (IG header band)
-    scratch = Image.new("RGBA", (W, STORY_H), (0, 0, 0, 0))
-    content_end = STORY_H - STORY_HEM - 40
-    has_box = bool(game.get("periods") or side_shots(game))
-    box_rh, box_hh = 88, 56
-    box_h = box_score(scratch, game, colors, cfg, cache_dir, L, R, 0, row_h=box_rh, head_h=box_hh) if has_box else 0
-    sc_h = scorers_panel(scratch, game, colors, cfg, L, R, 0, max_lines=3, size=50)
-    blocks = [b for b in (box_h, sc_h) if b]
-    if photo is not None:
-        # compact header over the dark top of the photo, a clear photo window,
-        # then the horizontal scorebug (shorter than the stacked one)
-        head_kw = dict(top=head_top - 20, size=170, scrim=True, inline_tag=True)
-        hb = header(scratch, title, game, colors, cfg, **head_kw)
-        names = not has_box
-        min_gap, want = 34, 460
-        for hgt in range(270, 179, -4):
-            bug_h = hgt + (112 if names else 0)
-            free = content_end - hb - bug_h - sum(blocks)
-            if free - want >= min_gap * len(blocks):
-                break
-        window = free - min_gap * len(blocks)
-        gap = min_gap
-        if window > 600:
-            gap = min(80, min_gap + (window - 600) / max(1, len(blocks) + 1))
-            window = free - gap * len(blocks)
-        y = hb + window
-        img = background(W, STORY_H, colors, seed, photo, photo_window=(hb, y), photo_top=STORY_HEM)
-        hem(img, colors, seed, top=True)
-        hem(img, colors, seed, top=False)
-        lockup(img, cfg, colors, L, lock_cy, 84, 36)
-        header(img, title, game, colors, cfg, **head_kw)
-        add_speed(img, colors, seed, y + 10, y + hgt - 10, count=30)
-        y = scorebug_h(img, game, colors, cfg, cache_dir, y, hgt, names=names)
-    else:
-        hb = header(scratch, title, game, colors, cfg, top=head_top, size=224)
-        rgap = 18
-        for row_h in range(320, 179, -4):
-            bug_h = 2 * row_h + rgap
-            free = content_end - hb - bug_h - sum(blocks)
-            if free >= 40 * (len(blocks) + 1.3):
-                break
-        gap, _, lead = _layout(free, len(blocks), 0, 40, 90 if has_box else 130)
-        y = hb + lead
-        img = background(W, STORY_H, colors, seed, None, hero=(0.42,))
-        hem(img, colors, seed, top=True)      # y 0..232, under the IG story header
-        hem(img, colors, seed, top=False)     # mirrored, y 1688..1920 under the reply bar
-        # no @handle in the story lockup: Instagram shows the account name right above it
-        lockup(img, cfg, colors, L, lock_cy, 84, 36)
-        header(img, title, game, colors, cfg, top=head_top, size=224)
-        add_speed(img, colors, seed, y - 20, y + bug_h + 20, count=30)
-        y = scorebug_v(img, game, colors, cfg, cache_dir, y, row_h=row_h, gap=rgap)
-    if has_box:
-        y = box_score(img, game, colors, cfg, cache_dir, L, R, y + gap, row_h=box_rh, head_h=box_hh)
-    if sc_h:
-        scorers_panel(img, game, colors, cfg, L, R, y + gap, max_lines=3, size=50)
-    return img
+def _period_key(g):
+    p = g.get("period")
+    try:
+        return int(p)
+    except (TypeError, ValueError):
+        s = str(p or "").upper()
+        return {"OT": 4, "JA": 4, "SO": 5, "VL": 5}.get(s, s or None)
 
 
-def _log_rows(goals):
-    rows, cur = [], None
-    for g in goals:
-        if g.get("period") != cur:
-            cur = g.get("period")
-            rows.append(("hdr", cur, False))
-        rows.append(("goal", g, False))
-    return rows
-
-
-def _split_two(rows):
-    """Split log rows into two columns of near-equal length.
-
-    A split inside a period repeats its header as '(CONT.)' in the right column.
-    A split that would leave a period header with only one or two goals at the
-    foot of the left column (or carry only one or two into the right one) reads
-    as a layout accident, so such splits are avoided whenever another split
-    exists; the columns may then differ by a few rows."""
-    best = best_any = None
-    for i in range(1, len(rows)):
-        left, right = rows[:i], rows[i:]
-        if left[-1][0] == "hdr":
-            continue
-        mid = right[0][0] == "goal"          # the split falls inside a period
-        r = ([("hdr", right[0][1]["period"], True)] if mid else []) + right
-        key = (max(len(left), len(r)), abs(len(left) - len(r)), -len(left))
-        if best_any is None or key < best_any[0]:
-            best_any = (key, left, r)
-        if mid:
-            tail = 0                          # goals of the split period in the left column
-            for k, _, _ in reversed(left):
-                if k == "hdr":
-                    break
-                tail += 1
-            head = 0                          # goals of the split period carried right
-            for k, _, _ in right:
-                if k == "hdr":
-                    break
-                head += 1
-            if tail <= 2 or head <= 2:
-                continue
-        if best is None or key < best[0]:
-            best = (key, left, r)
-    best = best or best_any
-    return best[1], best[2]
-
-
-PERIOD_NAMES = {1: "1ST PERIOD", 2: "2ND PERIOD", 3: "3RD PERIOD", 4: "OVERTIME"}
-
-
-def _goal_type(g):
+def goal_type(g):
     for k in ("type", "type_raw"):
-        t = (g.get(k) or "").strip().upper()
-        if t in TYPE_LABEL:
-            return TYPE_LABEL[t]
+        v = (g.get(k) or "").strip().upper()
+        v = {"YV": "PP", "AV": "SH", "TM": "EN"}.get(v, v)
+        if v in ("PP", "SH", "EN", "PS"):
+            return v
     return ""
 
 
-def _draw_log_col(img, rows, game, cfg, cache_dir, x0, x1, top, row_h, size, compact, pitch=None, chip=False):
-    """One column of the goal log. pitch: vertical step per row (>= row_h when a
-    shorter column is spread to end level with its neighbour). chip: draw the
-    scoring team's logo at the right edge (full-width layout)."""
-    colors = cfg["colors"]
-    pitch = pitch or row_h
-    f_time = barlow(int(size * 0.84), "SemiBold")
-    f_score = barlow(size, "ExtraBold")
-    f_name = barlow(size, "Bold")
-    f_tag = barlow(int(size * 0.66), "ExtraBold")
-    tw_time = text_w("00:00", f_time)
-    tw_score = max(text_w("00–00", f_score),
-                   max((text_w((it.get("score_after") or "").replace("-", "–"), f_score)
-                        for k, it, _ in rows if k == "goal"), default=0))
-    y = top
-    for kind, item, cont in rows:
-        if kind == "hdr":
-            label = PERIOD_NAMES.get(item, "PERIOD %s" % item)
-            if cont:
-                label += " (CONT.)"
-            hf = barlow(int(size * 0.76), "ExtraBoldItalic")
-            th = min(row_h * 0.70, size * 1.15)
-            ty = y + row_h - th - row_h * 0.10
-            tw = text_w(label, hf, 3) + 40
-            poly(img, para(x0, ty, x0 + tw, ty + th), rgb(colors["orange"]))
-            draw_text(img, (x0 + 16, baseline_for_center(hf, label, ty + th / 2)), label, hf,
-                      rgb(colors["green_dark"]), 3)
-            line(img, [(x0 + tw + 14, ty + th / 2), (x1, ty + th / 2)], (255, 255, 255, 40), 2)
-            y += pitch
-            continue
-        g = item
-        ours = g.get("team") == "us"
-        cy = y + row_h / 2
-        if ours:
-            poly(img, [(x0, y + 3), (x1, y + 3), (x1, y + row_h - 3), (x0, y + row_h - 3)],
-                 rgb(colors["orange"], 30))
-            poly(img, para(x0, y + 3, x0 + 8, y + row_h - 3), rgb(colors["orange"]))
-        col = rgb(colors["cream"]) if ours else rgb(colors["cream"], 165)
-        bl = baseline_for_center(f_name, "H", cy)
-        x = x0 + 20
-        draw_text(img, (x, bl), g.get("time") or "", f_time, rgb(colors["cream"], 205 if ours else 140))
-        x += tw_time + size * 0.5
-        sc = (g.get("score_after") or "").replace("-", "–")
-        draw_text(img, (x, bl), sc, f_score, rgb(colors["orange"]) if ours else col)
-        x += tw_score + size * 0.5
-        right = x1 - 10
-        if chip:
-            side = game.get("us_side", "home") if ours else ("away" if game.get("us_side", "home") == "home" else "home")
-            lg, kind = logo_image(game[side], cache_dir, colors, cfg)
-            cs = int(row_h * 0.62)
-            small_logo(img, lg, kind, right - cs, cy - cs / 2, cs, colors)
-            right -= cs + 18
-        tag = _goal_type(g)
-        if tag:
-            tw = text_w(tag, f_tag, 2) + 16
-            th = size * 0.86
-            fill = rgb(colors["orange"]) if ours else rgb(colors["cream"], 210)
-            poly(img, para(right - tw, cy - th / 2, right, cy + th / 2, k=0.15), fill)
-            draw_text(img, (right - tw / 2 + 0.075 * th, baseline_for_center(f_tag, tag, cy)), tag, f_tag,
-                      rgb(colors["green_dark"]), 2, "ms")
-            right -= tw + 14
-        avail = right - x
-        who = name_of(g.get("scorer"))
-        names = [brief_name(a, game, g.get("team")) for a in (g.get("assists") or [])]
-        assists = ", ".join(n for n in names if n and n != "?")
-        nw = f_name.getlength(who)
-        if nw > avail:
-            who, assists = ellipsize(who, f_name, avail), ""
-            nw = f_name.getlength(who)
-        draw_text(img, (x, bl), who, f_name, col)
-        x += nw
-        if assists:
-            room = avail - nw - size * 0.42
-            k = 0.80
-            fa = barlow(int(size * k), "Medium")
-            while fa.getlength(assists) > room and k > 0.64:
-                k -= 0.04
-                fa = barlow(int(size * k), "Medium")
-            txt = ellipsize(assists, fa, room) if room > size else ""
-            if txt:
-                draw_text(img, (x + size * 0.42, bl), txt, fa, rgb(colors["cream"], 150 if ours else 115))
-        y += pitch
-    return y
-
-
-def _row_need(g, size, colw, game):
-    """Width a compact log row needs at `size` (time, score, name, assists, tag)."""
-    f_time = barlow(int(size * 0.84), "SemiBold")
-    f_score = barlow(size, "ExtraBold")
-    need = 20 + text_w("00:00", f_time) + size * 0.5
-    need += max(text_w("00–00", f_score), text_w((g.get("score_after") or "").replace("-", "–"), f_score)) + size * 0.5
-    need += barlow(size, "Bold").getlength(name_of(g.get("scorer")))
-    names = [brief_name(a, game, g.get("team")) for a in (g.get("assists") or [])]
-    assists = ", ".join(n for n in names if n and n != "?")
-    if assists:
-        need += size * 0.42 + barlow(int(size * 0.72), "Medium").getlength(assists)
-    if _goal_type(g):
-        need += text_w(_goal_type(g), barlow(int(size * 0.66), "ExtraBold"), 2) + 30
-    return need + 10
-
-
-def _team_stat_lines(game, cfg, values):
-    """[(label, value)] in home-away order, matching slide 1."""
+def log_goals(game):
+    """Goal log without shootout attempts, each with a score_after we can show."""
+    goals = [g for g in game.get("goals") or [] if _period_key(g) != 5]
+    us_home = game.get("us_side") != "away"
+    complete = len(goals) == goals_of(game["home"]) + goals_of(game["away"]) - (
+        1 if finish_word(game) == "SO" else 0)
+    h = a = 0
     out = []
-    for side in ("home", "away"):
-        out.append((team_label(game[side], cfg), values[side], bool(game[side].get("is_us"))))
+    for g in goals:
+        g = dict(g)
+        home_goal = (g.get("team") == "us") == us_home
+        h, a = (h + 1, a) if home_goal else (h, a + 1)
+        sc = (g.get("score_after") or "").strip()
+        if not sc:
+            sc = "{}-{}".format(h, a) if complete else ""
+        g["_score"] = sc.replace("-", "–")
+        out.append(g)
+    return out, complete
+
+
+def period_scores_by_key(game):
+    out = {}
+    for lbl, sc, _ in period_rows(game):
+        key = {"OT": 4, "SO": 5}.get(lbl)
+        if key is None:
+            try:
+                key = int(lbl)
+            except ValueError:
+                continue
+        out[key] = sc
     return out
 
 
-def summary_stats(game, cfg):
+def summary_stats(game):
+    """[(LABEL, home value, away value, caption)] for the stats band, home first like the header."""
+    home, away = game["home"], game["away"]
+    us_home = game.get("us_side") != "away"
+    names = "{} · {}".format(home.get("name") or "", away.get("name") or "")
     stats = []
-    sh = side_shots(game)
-    if sh:
-        stats.append(("SHOTS", _team_stat_lines(game, cfg, {"home": str(sh[0]), "away": str(sh[1])})))
-    goals = [g for g in game.get("goals") or [] if g.get("period") != 5]
-    typed = any(_goal_type(g) for g in goals) or (game.get("source") not in (None, "", "manual"))
+    shots = game.get("shots") or {}
+    if shots.get("us") is not None and shots.get("them") is not None:
+        hs, as_ = (shots["us"], shots["them"]) if us_home else (shots["them"], shots["us"])
+        stats.append(("SHOTS", hs, as_, names))
+    goals = [g for g in game.get("goals") or [] if _period_key(g) != 5]
+    typed = any(goal_type(g) for g in goals) or (game.get("source") not in (None, "", "manual"))
     if goals and typed:
-        pp = {"home": 0, "away": 0}
-        us = game.get("us_side", "home")
-        them = "away" if us == "home" else "home"
-        for g in goals:
-            if _goal_type(g) == "PP":
-                pp[us if g.get("team") == "us" else them] += 1
-        stats.append(("PP GOALS", _team_stat_lines(game, cfg, {k: str(v) for k, v in pp.items()})))
+        pp_us = sum(1 for g in goals if goal_type(g) == "PP" and g.get("team") == "us")
+        pp_them = sum(1 for g in goals if goal_type(g) == "PP" and g.get("team") != "us")
+        stats.append(("POWER-PLAY GOALS", pp_us if us_home else pp_them, pp_them if us_home else pp_us, names))
     gk = [g for g in game.get("goalies") or [] if g.get("saves") is not None]
     if gk:
-        vals = {}
-        for side in ("home", "away"):
-            mine = [g for g in gk if bool(g.get("is_us")) == bool(game[side].get("is_us"))]
-            vals[side] = "  ·  ".join("%s %s" % (name_of(g.get("name"), "last"), g["saves"]) for g in mine) or "–"
-        stats.append(("SAVES", _team_stat_lines(game, cfg, vals)))
+        def side(is_home):
+            want_us = is_home == us_home
+            return [g for g in gk if bool(g.get("is_us")) == want_us]
+        gh, ga = side(True), side(False)
+        if gh or ga:
+            def total(lst):
+                return sum(int(g.get("saves") or 0) for g in lst) if lst else None
+
+            def nm(lst):
+                return " / ".join(last_name(g.get("name")) for g in lst) or "–"
+            stats.append(("SAVES", total(gh), total(ga), "{} · {}".format(nm(gh), nm(ga))))
     return stats
 
 
-def summary_slide(game, cfg, cache_dir):
-    colors = cfg["colors"]
-    seed = game_seed(game) + 1
-    img = background(W, H, colors, seed, None, hero=(0.22,))
-    add_speed(img, colors, seed, 280, 400, count=16)
-    header(img, "SUMMARY", game, colors, cfg, top=62, size=140, tag=False)
-    home, away = game["home"], game["away"]
-    by0, bh = 262, 118
-    poly(img, chamfer(L, by0, R, by0 + bh, 22), (4, 16, 9, 235), shadow=(160, 18, 0, 14))
-    poly(img, [(L + 22, by0), (R, by0), (R, by0 + 4), (L + 18, by0 + 4)], accent(game, colors))
-    pad = 10
-    s = bh - 2 * pad
-    lh, kh = logo_image(home, cache_dir, colors, cfg)
-    la, ka = logo_image(away, cache_dir, colors, cfg)
-    logo_tile(img, lh, kh, (L + pad, by0 + pad, s), colors, shadow=False)
-    logo_tile(img, la, ka, (R - pad - s, by0 + pad, s), colors, shadow=False)
-    mid = (L + R) / 2
-    cw = 138
-    shs = 0.17 * (bh - 2 * pad)
-    score_cell(img, game, "home", cell(mid - 7 - cw, by0 + pad, mid + shs / 2 - 7, by0 + bh - pad, 0.17), 98, cw - 30)
-    score_cell(img, game, "away", cell(mid - shs / 2 + 7, by0 + pad, mid + 7 + cw, by0 + bh - pad, 0.17), 98, cw - 30)
-    maxw = (mid - 7 - cw - 24) - (L + pad + s + 24)
-    labels, nfs = name_labels(game, cfg, cache_dir, lambda z: barlow(z, "ExtraBoldItalic"), 50, maxw, 30,
-                              shared=False)
-    for side, x, anc, label, nf in (("home", L + pad + s + 24, "l", labels[0], nfs[0]),
-                                    ("away", R - pad - s - 24, "r", labels[1], nfs[1])):
-        draw_label(img, x, by0 + bh / 2, label, nf, name_color(game, side, colors), 2, anc)
+def draw_pair(d, x, base, a, b, f, color, dash_color):
+    """'a – b' in display type with a drawn dash (Anton's en dash is too short)."""
+    sa = "–" if a is None else str(a)
+    sb = "–" if b is None else str(b)
+    d.text((x, base), sa, font=f, fill=color, anchor="ls")
+    x += f.getlength(sa) + f.size * 0.12
+    dash = f.size * 0.30
+    cy = base - f.size * 0.42
+    d.line((x, cy, x + dash, cy), fill=dash_color, width=max(4, int(f.size * 0.08)))
+    x += dash + f.size * 0.12
+    d.text((x, base), sb, font=f, fill=color, anchor="ls")
 
-    # goal log
-    goals = [g for g in game.get("goals") or [] if g.get("period") != 5]
-    us_label = cfg["display_name"].upper()
-    stats = summary_stats(game, cfg)
-    sy1 = 1232
-    sy0 = sy1 - 150 if stats else sy1
-    top, bottom = by0 + bh + 26, sy0 - 26
-    avail = bottom - top
-    note = None
-    rows = _log_rows(goals)
-    # Up to 10 slots (goals + period headers): one full-width column, each row
-    # carrying the scoring team's logo chip and PP/SH/EN badge at the right edge.
-    # More: two columns balanced by slot count (headers included); the shorter
-    # column is spread so both end at the same height.
-    single = bool(rows) and len(rows) <= 10
-    if single:
-        row_h = min(86, avail / len(rows))
-        size = int(min(46, row_h * 0.6))
-        t0 = top + (avail - row_h * len(rows)) / 2
-        _draw_log_col(img, rows, game, cfg, cache_dir, L, R, t0, row_h, size, False, chip=True)
-    elif rows:
-        left, right = _split_two(rows)
-        n = max(len(left), len(right))
-        if avail / n < 30:
-            goals = [g for g in goals if g.get("team") == "us"]
-            note = "%s GOALS SHOWN" % us_label
-            rows = _log_rows(goals)
-            left, right = _split_two(rows) if len(rows) > 1 else (rows, [])
-            n = max(len(left), len(right), 1)
-        row_h = min(68, avail / n)
-        gx = 28
-        colw = (R - L - gx) / 2
-        size = int(min(34, row_h * 0.62))
-        while size > 20 and any(_row_need(it, size, colw, game) > colw for k, it, _ in rows if k == "goal"):
+
+def name_block(nm, max_w):
+    """(font, lines) for a team name in the summary header: one to three lines,
+    broken at spaces or after hyphens, set as large as max_w allows (40..20 px)."""
+    tokens, cur = [], ""
+    for ch in nm:
+        cur += ch
+        if ch in " -":
+            tokens.append(cur)
+            cur = ""
+    if cur:
+        tokens.append(cur)
+    options = [[nm]]
+    n = len(tokens)
+    for i in range(1, n):
+        options.append(["".join(tokens[:i]).strip(), "".join(tokens[i:]).strip()])
+        for j in range(i + 1, n):
+            options.append(["".join(tokens[:i]).strip(), "".join(tokens[i:j]).strip(), "".join(tokens[j:]).strip()])
+    best = None
+    for lines in options:
+        size = 40
+        while size > 20 and max(tracked_len(ln, font("cond_b", size), 0.04) for ln in lines) > max_w:
             size -= 1
-        # spare height goes to row spacing (up to 2.3x the type), not to empty bands
-        row_h = min(row_h, max(size * 2.3, 36))
-        t0 = top + (avail - row_h * n) / 2
-        for col, cx0, cx1 in ((left, L, L + colw), (right, L + colw + gx, R)):
-            if col:
-                pitch = row_h * n / len(col)
-                _draw_log_col(img, col, game, cfg, cache_dir, cx0, cx1, t0, row_h, size, True, pitch=pitch)
-        line(img, [(L + colw + gx / 2, t0 + 10), (L + colw + gx / 2, t0 + row_h * n - 6)],
-             (255, 255, 255, 34), 2)
-    if note:
-        draw_text(img, (R, by0 + bh + 20), note, barlow(22, "Bold"), rgb(colors["orange"]), 4, "rs")
+        key = (size - 3 * (len(lines) - 1), -len(lines))
+        if best is None or key > best[0]:
+            best = (key, size, lines)
+    return font("cond_b", best[1]), best[2]
 
-    # stats strip: one cell per stat, home line over away line (same order as slide 1)
+
+def summary_header(img, d, game, t):
+    home, away = game["home"], game["away"]
+    hg, ag = goals_of(home), goals_of(away)
+    win = winner_side(game)
+    ty, ts = 128, 132
+    tile(img, home, M, ty, ts, t["accent"] if win == "home" else t["panel"], t)
+    tile(img, away, W - M - ts, ty, ts, t["accent"] if win == "away" else t["panel"], t)
+    d = ImageDraw.Draw(img)
+    cy = ty + ts // 2
+    fsc = font("display", 132)
+    gap = 34
+    hcol = t["accent"] if win == "home" else t["text"]
+    acol = t["accent"] if win == "away" else t["text"]
+    for txt, x, col, anc in ((str(hg), W / 2 - gap, hcol, "rs"), (str(ag), W / 2 + gap, acol, "ls")):
+        l_, t_, r_, b_ = fsc.getbbox(txt, anchor="ls")
+        d.text((x, cy - (t_ + b_) / 2), txt, font=fsc, fill=col, anchor=anc)
+    d.line((W / 2 - 14, cy, W / 2 + 14, cy), fill=t["dim"], width=5)
+    for team, side, x, anc in ((home, "home", M + ts + 26, "l"), (away, "away", W - M - ts - 26, "r")):
+        score_w = fsc.getlength(str(hg if side == "home" else ag))
+        namew = W / 2 - gap - score_w - 40 - (M + ts + 26)
+        f, lines = name_block((team.get("name") or "").upper(), namew)
+        lh = f.size * 0.96
+        y0 = cy + 14 - (len(lines) - 1) * lh / 2 + (8 if len(lines) > 1 else 0)
+        for k, ln in enumerate(lines):
+            tracked(d, (x, y0 + k * lh), ln, f, t["text"], 0.04, anc + "s")
+        label(d, (x, y0 - f.size - 4), "HOME" if side == "home" else "AWAY", t["dim"], 15, anc + "s")
+    # status and period scores under the score
+    sy = ty + ts + 36
+    segs = status_segs(game, t, t["dim"])
+    f = font("label", 16)
+    total = sum(tracked_len(s.upper(), f, LABEL_TRACK) for s, _ in segs) + f.size * LABEL_TRACK * (len(segs) - 1)
+    x = W / 2 - total / 2
+    for s, c in segs:
+        x += tracked(d, (x, sy), s.upper(), f, c, LABEL_TRACK, "ls") + f.size * LABEL_TRACK
+    ps = period_segs(game, t, t["text"])
+    if ps:
+        pf = font("cond_sb", 30)
+        draw_segs(d, (W / 2 - segs_len(ps, pf) / 2, sy + 44), ps, pf)
+    return sy + 44 if ps else sy
+
+
+STATS_Y = 1136                       # rule above the stats band of the summary
+
+
+def summary_card(game):
+    theme = "away" if game.get("us_side") == "away" else "home"
+    t = THEMES[theme]
+    img = background(theme, 13)
+    d = ImageDraw.Draw(img)
+    wd, short, full = date_parts(game.get("date"))
+    top_row(img, t, game.get("competition") or "", [("{} {}".format(weekday_title(wd), full).strip(), t["text"])])
+    head_bottom = summary_header(img, d, game, t)
+    d = ImageDraw.Draw(img)
+
+    goals, complete = log_goals(game)
+    stats = summary_stats(game)
+    pscore = period_scores_by_key(game)
+
+    # ---- goal log: period headers + goals, split into two columns
+    items, cur = [], object()
+    for g in goals:
+        pk = _period_key(g)
+        if pk != cur:
+            cur = pk
+            items.append(("h", pk))
+        items.append(("g", g))
+
+    top = head_bottom + 46
+    bottom = STATS_Y - 42 if stats else H - M - 10
+    col_gap = 40
+    col_w = (W - 2 * M - col_gap) // 2
+    cols_x = [M, M + col_w + col_gap]
+    n_rows = len(items)
+    best = None
+
+    def hh(seq):
+        return sum(1.5 if k == "h" else 1.0 for k, _ in seq)
+
+    for i in range(1, n_rows):
+        if items[i - 1][0] == "h":
+            continue
+        a, b = items[:i], items[i:]
+        cost = max(hh(a), hh(b) + (1.5 if items[i][0] == "g" else 0)) + (0 if items[i][0] == "h" else 0.6)
+        if best is None or cost < best[0]:
+            best = (cost, i)
+    split = best[1] if best else n_rows
+    columns = [items[:split], items[split:]]
+    if columns[1] and columns[1][0][0] == "g":
+        prev = [it for it in items[:split] if it[0] == "h"][-1]
+        columns[1] = [("h", prev[1])] + columns[1]
+
+    # few goals: scorer over assists (two lines, larger type); many goals: one line each
+    stack = len(goals) <= 24
+    hw = 0.95 if stack else 1.5
+    units = max(sum(hw if k == "h" else 1.0 for k, _ in c) for c in columns if c) if items else 1
+    roomy = stack and units <= 9          # a short log gets larger type, not a sea of space
+    row = min((96.0 if roomy else 80.0) if stack else 58.0, (bottom - top) / max(units, 1))
+    fs_main = int(min(42 if roomy else 34, row * (0.46 if stack else 0.62)))
+
+    def row_need(g, fs):
+        ft, fsc_, fn, fa_ = font("cond", fs - 2), font("cond_b", fs), font("cond_sb", fs), font("cond_r", fs - 4)
+        ftag = font("label_b", max(12, int(fs * 0.5)))
+        nx = ft.getlength("00:00") + 16 + fsc_.getlength("00–00") + 22
+        tag = goal_type(g)
+        tw = (tracked_len(tag, ftag, 0.1) + 28) if tag else 0
+        nm = log_name(g.get("scorer"), game, g.get("team"), True)
+        asts = ", ".join(assist_names(g, game))
+        if stack:
+            return nx + max(fn.getlength(nm) + tw, fa_.getlength(asts))
+        return nx + fn.getlength(nm) + (12 + fa_.getlength(asts) if asts else 0) + tw
+
+    while fs_main > 20 and any(row_need(g, fs_main) > col_w for g in goals):
+        fs_main -= 1
+    row = min(row, fs_main * (2.25 if stack else 2.05))
+    used = units * row
+    slack = max(0, ((bottom - top) - used) / 2 - row * 0.25)
+    top = top + (slack * 0.8 if roomy else min(slack, row * 0.6))
+    f_time = font("cond", fs_main - 2)
+    f_score = font("cond_b", fs_main)
+    f_name = font("cond_sb", fs_main)
+    f_ast = font("cond_r", fs_main - 4)
+    f_tag = font("label_b", max(12, int(fs_main * 0.5)))
+    dropped = False
+
+    for ci, col in enumerate(columns):
+        x0 = cols_x[ci]
+        x1 = x0 + col_w
+        y = top
+        for kind, val in col:
+            if kind == "h":
+                y += row * (hw - 1.0) if not stack else row * 0.15
+                base = y + row * (0.62 if not stack else 0.45)
+                hsize = max(14, int(fs_main * 0.6))
+                name = period_name(val) if isinstance(val, int) else (str(val or "GOALS").upper())
+                w = label(d, (x0, base), name, t["accent"], hsize)
+                ps = pscore.get(val, "")
+                pw = 0
+                if ps:
+                    pf = font("cond_sb", max(16, int(fs_main * 0.72)))
+                    d.text((x1, base), ps, font=pf, fill=t["dim"], anchor="rs")
+                    pw = pf.getlength(ps)
+                ly = base - hsize * 0.36
+                d.line((x0 + w + 16, ly, x1 - pw - 16, ly), fill=t["rule"], width=1)
+                y += row if not stack else row * 0.8
+                continue
+            g = val
+            ours = g.get("team") == "us"
+            base = y + row * (0.68 if not stack else 0.5)
+            tcol = t["text"] if ours else t["faint"]
+            d.text((x0 + f_time.getlength("00:00"), base), (g.get("time") or "").strip(), font=f_time,
+                   fill=t["dim"], anchor="rs")
+            sc = g["_score"]
+            sx = x0 + f_time.getlength("00:00") + 16
+            pill_w = f_score.getlength("00–00") + 12
+            if ours and sc:
+                ph_ = fs_main * 1.02
+                pt = base - fs_main * 0.36 - ph_ / 2
+                d.rounded_rectangle((sx - 6, pt, sx - 6 + pill_w, pt + ph_), radius=4, fill=t["accent"])
+                d.text((sx - 6 + pill_w / 2, base), sc, font=f_score, fill=t["on_accent"], anchor="ms")
+            else:
+                d.text((sx - 6 + pill_w / 2, base), sc, font=f_score, fill=t["faint"], anchor="ms")
+            nx = sx + pill_w + 10
+            tag = goal_type(g)
+            tag_w = 0
+            if tag:
+                tw = tracked_len(tag, f_tag, 0.1)
+                bx1 = x1
+                bx0 = bx1 - tw - 14
+                th = f_tag.size + 9
+                by1 = base - fs_main * 0.36 + th / 2
+                d.rounded_rectangle((bx0, by1 - th, bx1, by1), radius=3, outline=tcol, width=2)
+                tracked(d, ((bx0 + bx1) / 2, by1 - 5), tag, f_tag, tcol, 0.1, "ms")
+                tag_w = tw + 14 + 14
+            nm = log_name(g.get("scorer"), game, g.get("team"), True)
+            d.text((nx, base), nm, font=f_name, fill=tcol, anchor="ls")
+            ax = nx + f_name.getlength(nm) + 12
+            if stack:
+                ax = nx
+                tag_w = 0
+            asts = assist_names(g, game)
+            s = ", ".join(asts)
+            fa = f_ast
+            while s and fa.getlength(s) > x1 - tag_w - ax:
+                if fa.size > fs_main - 9:
+                    fa = font("cond_r", fa.size - 1)
+                    continue
+                asts = asts[:-1]
+                s = ", ".join(asts)
+                dropped = True
+            if s:
+                d.text((ax, base + (fs_main * 0.92 if stack else 0)), s, font=fa, fill=t["dim"], anchor="ls")
+            y += row
+    if dropped:
+        print("note: some assists did not fit the goal log and were left out of summary_feed.jpg", file=sys.stderr)
+    if not complete:
+        label(d, (W - M, bottom + 6), "PARTIAL GOAL LOG", t["dim"], 14, "rs")
+
+    # ---- stats band, home first like the header
     if stats:
-        col_w = min((R - L) / len(stats), 360)
-        sx = L + ((R - L) - col_w * len(stats)) / 2
-        poly(img, chamfer(sx, sy0, sx + col_w * len(stats), sy1, 18, "tl br"), (4, 16, 9, 220))
-        kf = barlow(24, "Bold")
-        # one label font for the whole strip, short labels as in the box score
-        pairs = [(team_label(game[sd], cfg), short_label(game[sd], cfg)) for sd in ("home", "away")]
-        labels, lf = table_labels(pairs, lambda z: barlow(z, "SemiBold"), 32, min(150, col_w * 0.42), 28, 1)
-        lab_w = max(text_w(t, lf, 1) for t in labels)
-        for i, (k, lines) in enumerate(stats):
-            cx0 = sx + i * col_w + 26
-            cx1 = sx + (i + 1) * col_w - 22
+        sy = STATS_Y
+        d.line((M, sy, W - M, sy), fill=t["rule"], width=2)
+        cw = (W - 2 * M) / len(stats)
+        for i, (lab, hv, av, sub) in enumerate(stats):
+            x = M + i * cw + (0 if i == 0 else 28)
             if i:
-                line(img, [(sx + i * col_w, sy0 + 18), (sx + i * col_w, sy1 - 18)], (255, 255, 255, 36), 2)
-            draw_text(img, (cx0, sy0 + 38), k, kf, rgb(colors["orange"]), 4)
-            vroom = cx1 - cx0 - lab_w - 18
-            split = []
-            for _, val, _ in lines:
-                head, _, num = val.rpartition(" ")
-                if not (head and num.isdigit() and "·" not in head):
-                    head, num = "", val
-                split.append((head, num))
-
-            def vwidth(sz, hd, nm):
-                return text_w(nm, barlow(sz, "ExtraBold")) + (barlow(sz, "SemiBold").getlength(hd + " ") if hd else 0)
-
-            vsize = 36  # one value size per cell
-            while vsize > 24 and any(vwidth(vsize, hd, nm) > vroom for hd, nm in split):
-                vsize -= 2
-            vf, hf2 = barlow(vsize, "ExtraBold"), barlow(vsize, "SemiBold")
-            for j, ((lab_, val, is_us), (head, num)) in enumerate(zip(lines, split)):
-                yb = sy0 + 84 + j * 44
-                # orange values celebrate: on a loss our numbers stay cream too
-                vcol = rgb(colors["orange"]) if is_us and not is_loss(game) else rgb(colors["cream"])
-                draw_text(img, (cx0, yb), labels[j], lf, rgb(colors["cream"], 215), 1)
-                if not head:
-                    num = ellipsize(num, vf, vroom)
-                nw = draw_text(img, (cx1, yb), num, vf, vcol, 0, "rs")
-                if head:
-                    head = ellipsize(head, hf2, vroom - nw - hf2.getlength(" "))
-                    draw_text(img, (cx1 - nw, yb), head + " ", hf2, vcol, 0, "rs")
-    footer(img, game, colors, cfg, 1296)
+                d.line((M + i * cw, sy + 26, M + i * cw, H - M), fill=t["rule"], width=1)
+            label(d, (x, sy + 44), lab, t["dim"], 16)
+            fv = font("display", 62)
+            draw_pair(d, x, sy + 116, hv, av, fv, t["text"], t["text"])
+            f = font("cond", fit_size(sub, "cond", 24, cw - 40))
+            d.text((x, sy + 150), sub, font=f, fill=t["dim"], anchor="ls")
     return img
 
 
-# ---------------------------------------------------------------- game-day post
+# ------------------------------------------------------------------ main
 
-def kickoff_parts(game):
-    """('SAT', '18.10.', '21:10') from the game's date and time."""
-    import datetime as dt
-    raw = str(game.get("date") or "")
-    try:
-        d = dt.date(*[int(p) for p in raw[:10].split("-")])
-        dow, day = DOW[d.weekday()], "%d.%d." % (d.day, d.month)
-    except (TypeError, ValueError):
-        dow, day = "", raw.upper()
-    t = str(game.get("time") or game.get("kickoff") or "").strip()
-    return dow, day, (t or "TBA")
-
-
-def pin_marker(img, cx, cy, h, fill, hole):
-    """Map pin drawn in code: a teardrop with a hole, centred on (cx, cy)."""
-    k = 4                                   # supersample for smooth edges
-    r = h * 0.36
-    size = (int(2 * r * k) + 8 * k, int(h * k) + 8 * k)
-    m = Image.new("RGBA", size, (0, 0, 0, 0))
-    d = ImageDraw.Draw(m)
-    ox, oy = 4 * k, 4 * k
-    ccx, ccy = ox + r * k, oy + r * k
-    tip = oy + h * k
-    d.ellipse((ccx - r * k, ccy - r * k, ccx + r * k, ccy + r * k), fill=fill)
-    d.polygon([(ccx - r * k * 0.86, ccy + r * k * 0.5), (ccx + r * k * 0.86, ccy + r * k * 0.5), (ccx, tip)],
-              fill=fill)
-    hr = r * k * 0.42
-    d.ellipse((ccx - hr, ccy - hr, ccx + hr, ccy + hr), fill=hole)
-    m = m.resize((size[0] // k, size[1] // k), RESAMPLE)
-    sh = Image.new("RGBA", m.size, (0, 0, 0, 0))
-    sh.putalpha(m.getchannel("A").point(lambda v: v * 120 // 255))
-    sh = sh.filter(ImageFilter.GaussianBlur(3))
-    x0, y0 = cx - m.width / 2, cy - h / 2 - 4
-    _composite_at(img, sh, x0 + 3, y0 + 5)
-    _composite_at(img, m, x0, y0)
-
-
-MATCHUP_NAMES_H = 112      # HOME/AWAY line + name line under the matchup panel
-
-
-def matchup(img, game, colors, cfg, cache_dir, y0, s, names=True):
-    """[logo] VS [logo] on a chamfered panel; HOME/AWAY + team names under it."""
-    pad = 14
-    y1 = y0 + s + 2 * pad
-    poly(img, chamfer(L, y0, R, y1, 34), (4, 16, 9, 235), shadow=(170, 22, 0, 18))
-    poly(img, [(L + 34, y0), (R, y0), (R, y0 + 5), (L + 29, y0 + 5)], rgb(colors["orange"]))
-    for side, x in (("home", L + pad), ("away", R - pad - s)):
-        lg, kind = logo_image(game[side], cache_dir, colors, cfg)
-        logo_tile(img, lg, kind, (x, y0 + pad, s), colors, shadow=False)
-    # centre: a slanted light band with VS on it
-    mid = (L + R) / 2
-    gx0, gx1 = L + pad + s, R - pad - s
-    bw = min(gx1 - gx0 - 40, s * 0.62)
-    hh = (y1 - pad) - (y0 + pad)
-    band = para(mid - bw / 2 - SLANT * hh / 2, y0 + pad, mid + bw / 2 - SLANT * hh / 2, y1 - pad)
-    poly(img, band, (255, 255, 255, 14))
-    line(img, [(band[0][0] - 8, band[0][1]), (band[3][0] - 8, band[3][1])], rgb(colors["orange"], 130), 3)
-    line(img, [(band[1][0] + 8, band[1][1]), (band[2][0] + 8, band[2][1])], rgb(colors["orange"], 130), 3)
-    vf = fit_font("VS", anton, int(s * 0.46), bw - 30)
-    slant_text(img, (mid, baseline_for_center(vf, "VS", (y0 + y1) / 2)), "VS", vf, rgb(colors["orange"]), 4,
-               "ms", shadow=(160, 10, 4, 8))
-    if not names:
-        return y1
-    tf = barlow(24, "Bold")
-    ty = y1 + 42
-    draw_text(img, (L + 8, ty), "HOME", tf, rgb(colors["orange"]), 5, "ls")
-    draw_text(img, (R - 8, ty), "AWAY", tf, rgb(colors["orange"]), 5, "rs")
-    ny = ty + 66
-    labels, nfs = matchup_names(game, cfg, cache_dir)
-    for (x, anc), label, nf in zip(((L + 6, "ls"), (R - 6, "rs")), labels, nfs):
-        y = ny
-        for ln in label:      # a long badge name wraps downwards (matchup_extra makes room)
-            draw_text(img, (x, y), ln, nf, rgb(colors["cream"]), 2, anc)
-            y += _line_step(nf)
-    return ny + 4 + matchup_extra(game, cfg, cache_dir)
-
-
-def matchup_names(game, cfg, cache_dir):
-    return name_labels(game, cfg, cache_dir, lambda z: barlow(z, "ExtraBoldItalic"), 60, 440, 34, shared=False)
-
-
-def _line_step(f):
-    _, t, _, b = ink_box(f, "NA")
-    return (b - t) * 1.32
-
-
-def matchup_extra(game, cfg, cache_dir):
-    """Extra height when a team name under the matchup needs a second line."""
-    labels, nfs = matchup_names(game, cfg, cache_dir)
-    return max(_line_step(f) * (len(ls) - 1) for ls, f in zip(labels, nfs))
-
-
-def kickoff_panel(img, game, colors, cfg, y0, main_h, strip_h, shadow_chev=False):
-    """FACE-OFF tab; weekday + date left, the kick-off time huge right; arena strip."""
-    dow, day, tm = kickoff_parts(game)
-    arena = (game.get("arena") or "").strip().upper()
-    tab_h = 50
-    py0 = y0 + tab_h / 2
-    y_main0 = y0 + tab_h + 6
-    y_main1 = y_main0 + main_h
-    y1 = y_main1 + (strip_h if arena else 18)
-    poly(img, chamfer(L, py0, R, y1, 26, "br"), (4, 16, 9, 228), shadow=(150, 18, 0, 14))
-    label = "FACE-OFF"
-    lf = barlow(30, "ExtraBoldItalic")
-    lw = text_w(label, lf, 4) + 62
-    poly(img, para(L, y0, L + lw, y0 + tab_h), rgb(colors["orange"]), shadow=(110, 8, 3, 6))
-    draw_text(img, (L + 24, baseline_for_center(lf, label, y0 + tab_h / 2)), label, lf, rgb(colors["green_dark"]), 4)
-    chevrons(img, L + lw + 30, y0 + tab_h / 2 + 2, 3, 20, rgb(colors["orange"], 200), step=15, thick=4,
-             shadow=shadow_chev)
-    # left: weekday over date
-    lx0, lx1 = L + 40, L + 330
-    wf = fit_font(dow or "DAY", anton, int(main_h * 0.44), lx1 - lx0 - 20)
-    df = fit_font(day, lambda z: barlow(z, "ExtraBoldItalic"), int(main_h * 0.33), lx1 - lx0 - 10)
-    _, wt, _, wb = ink_box(wf, "SAT")
-    _, dt_, _, db = ink_box(df, "18.")
-    gap = main_h * 0.07
-    block = (wb - wt) + gap + (db - dt_) if dow else (db - dt_)
-    by = (y_main0 + y_main1) / 2 - block / 2
-    if dow:
-        slant_text(img, (lx0, by - wt), dow, wf, rgb(colors["orange"]), 4, "ls")
-        by += (wb - wt) + gap
-    draw_text(img, (lx0 + 2, by - dt_), day, df, rgb(colors["cream"]), 2)
-    # slanted divider
-    dx = lx1 + 10
-    sk = SLANT * (main_h - 40)
-    line(img, [(dx + sk, y_main0 + 20), (dx, y_main1 - 20)], (255, 255, 255, 60), 3)
-    # right: the time, the hero of the card
-    rx0, rx1 = dx + sk + 40, R - 40
-    tf = fit_font(tm, anton, int(main_h * 0.94), rx1 - rx0)
-    slant_text(img, ((rx0 + rx1) / 2, baseline_for_center(tf, "0", (y_main0 + y_main1) / 2)), tm, tf,
-               rgb(colors["cream"]), 6, "ms", shadow=(150, 14, 6, 10))
-    if arena:
-        line(img, [(L + 30, y_main1), (R - 30, y_main1)], (255, 255, 255, 34), 2)
-        cy = y_main1 + strip_h / 2 - 2
-        ph = strip_h * 0.56
-        pin_marker(img, L + 52, cy, ph, rgb(colors["orange"]), rgb(colors["green_dark"]))
-        af = fit_font(arena, lambda z: barlow(z, "ExtraBoldItalic"), int(strip_h * 0.52), R - 60 - (L + 92), 24, 3)
-        draw_text(img, (L + 92, baseline_for_center(af, "H", cy)), arena, af, rgb(colors["cream"]), 3)
-    return y1
-
-
-def pregame_meta(game, colors):
-    """Right-hand header column of the game-day post: competition (+ series)."""
-    comp = (game.get("competition") or "").strip().upper()
-    series = (game.get("series") or "").strip().upper()
-    out = []
-    if comp:
-        out.append((comp, fit_font(comp, lambda s: barlow(s, "ExtraBoldItalic"), 40, 330, 22, 3),
-                    rgb(colors["orange"]), 3))
-    if series and series != comp:
-        if "," in series and series.split(",")[0].strip() == comp:
-            series = series.split(",", 1)[1].strip()
-        out.append((series, fit_font(series, lambda s: barlow(s, "SemiBold"), 30, 330, 20, 2),
-                    rgb(colors["cream"], 200), 2))
-    return out
-
-
-def pregame_tag(game):
-    return ("HOME GAME" if game.get("us_side", "home") == "home" else "AWAY GAME", "win")
-
-
-def pregame_slide(game, cfg, cache_dir, photo=None, height=H):
-    """Game-day post: GAME DAY, both logos with VS, kick-off time, arena, competition."""
-    colors = cfg["colors"]
-    seed = game_seed(game) + 7
-    story = height > H
-    has_photo = photo is not None
-    if story:
-        top, size, content_end = (376 if has_photo else 396), (170 if has_photo else 224), STORY_H - STORY_HEM - 40
-    else:
-        top, size, content_end = (48 if has_photo else 62), (150 if has_photo else 200), 1206
-    head_kw = dict(top=top, size=size, scrim=has_photo, inline_tag=has_photo, meta=pregame_meta(game, colors),
-                   tag_value=pregame_tag(game))
-    scratch = Image.new("RGBA", (W, height), (0, 0, 0, 0))
-    hb = header(scratch, "GAME DAY", game, colors, cfg, **head_kw)
-    has_arena = bool((game.get("arena") or "").strip())
-    names_h = MATCHUP_NAMES_H + matchup_extra(game, cfg, cache_dir)
-    if not has_photo:
-        gap_min = 46
-        strip_h = 92 if story else 84
-        for s in range(380 if story else 336, 199, -4):
-            main_h = int(s * (0.95 if story else 0.78))
-            m_h = s + 28 + names_h
-            k_h = 56 + main_h + (strip_h if has_arena else 18)
-            free = content_end - hb - m_h - k_h
-            if free >= gap_min * 2:      # gaps above and between; content_end has the bottom margin
-                break
-        gap = min(free / 2.0, 130 if story else 64)
-        y0 = hb + gap + (free - gap * 2) / 2
-        img = background(W, height, colors, seed, None, hero=(0.40,))
-    else:
-        want = 520 if story else 380
-        strip_h = 80 if story else 72
-        for s in range(300 if story else 250, 159, -4):
-            main_h = int(s * 0.80)
-            m_h = s + 28 + names_h
-            k_h = 56 + main_h + (strip_h if has_arena else 18)
-            free = content_end - hb - m_h - k_h
-            if free - want >= 30:
-                break
-        gap = 30
-        window = free - gap
-        if window > want + 140:
-            gap = min(70, gap + (window - want - 140) / 2)
-            window = free - gap
-        y0 = hb + window
-        img = background(W, height, colors, seed, photo, photo_window=(hb, y0),
-                         photo_top=STORY_HEM if story else 0)
-    if story:
-        hem(img, colors, seed, top=True)
-        hem(img, colors, seed, top=False)
-        lockup(img, cfg, colors, L, 318, 84, 36)
-    header(img, "GAME DAY", game, colors, cfg, **head_kw)
-    add_speed(img, colors, seed, y0 + 10, y0 + s + 18)
-    y = matchup(img, game, colors, cfg, cache_dir, y0, s)
-    kickoff_panel(img, game, colors, cfg, y + gap, main_h, strip_h, shadow_chev=has_photo)
-    if not story:
-        footer(img, game, colors, cfg, 1296)
-    return img
-
-
-# ---------------------------------------------------------------- main
-
-PREGAME_SCHEMA = "naadat-result-post/pregame@1"
-EXIT_NOT_FINAL = 2
+def finish(img, seed):
+    return grain(img, seed)
 
 
 def is_pregame(game):
@@ -2006,60 +1227,70 @@ def is_pregame(game):
 
 
 def main(argv=None):
-    global GAME_DIR
+    global GAME_DIR, CFG
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("game_json", help="game.json (result post) or pregame.json (schema %s)" % PREGAME_SCHEMA)
-    ap.add_argument("--out", default="out")
-    ap.add_argument("--photo", help="optional real, unedited camera photo (jpg/png) shown in a clear window at "
-                    "the top of slide 1 (and the story); slide 2 (summary) stays photo-free on purpose. A photo "
-                    "or logo_file that declares AI generation/editing is refused (exit 4)")
+    ap.add_argument("--out", default="out", help="output folder (default: out)")
     ap.add_argument("--no-summary", action="store_true", help="skip slide 2 (result post)")
-    ap.add_argument("--story", action="store_true", help="also write the 1080x1920 story version")
-    ap.add_argument("--no-story", action="store_true", help=argparse.SUPPRESS)  # old flag; no story is the default
+    ap.add_argument("--photo-index", type=int, help="use library photo K (0-based, see assets/photos/photos.json) "
+                    "instead of the automatic pick")
+    ap.add_argument("--photo", help="use this real, unedited photo instead of the library (needs --photo-credit); "
+                    "a photo that declares AI generation/editing is refused (exit 4)")
+    ap.add_argument("--photo-credit", help="credit for --photo, written to photo_credit.txt")
     ap.add_argument("--pregame", action="store_true",
                     help="render the game-day post; normally detected from the file's schema")
     ap.add_argument("--allow-unfinished", action="store_true",
                     help="render a game that is not final; the card then says LIVE / PROVISIONAL, never FINAL")
     ap.add_argument("--png", action="store_true", help="also write lossless PNG copies")
+    ap.add_argument("--no-story", action="store_true", help=argparse.SUPPRESS)  # old flag; stories are gone
     args = ap.parse_args(argv)
 
-    with open(os.path.join(ASSETS, "brand", "team.json"), encoding="utf-8") as f:
-        cfg = json.load(f)
-    with open(args.game_json, encoding="utf-8") as f:
-        game = json.load(f)
+    CFG = load_json(os.path.join(ASSETS, "brand", "team.json"))
+    game = load_json(args.game_json)
     GAME_DIR = os.path.dirname(os.path.abspath(args.game_json))
-    game["_colors"] = cfg["colors"]
     pregame = args.pregame or is_pregame(game)
+    names = [str((game.get(s) or {}).get("name", "")) for s in ("home", "away")]
+    if game.get("date") == "YYYY-MM-DD" or game.get("time") == "HH:MM" or "Opponent" in names:
+        print("ERROR: %s still holds template placeholders (YYYY-MM-DD, HH:MM or 'Opponent'). Fill them in "
+              "and run fetch_game.py --validate first." % args.game_json, file=sys.stderr)
+        return 3
     for side in ("home", "away"):
+        game.setdefault(side, {})
         game[side].setdefault("is_us", game.get("us_side") == side)
         if not pregame:
             game[side]["goals"] = goals_of(game[side])
     if not pregame and not is_final(game) and not args.allow_unfinished:
         print("ERROR: this game is not final (status %r), so there is no result to post yet. For a game-day "
-              "post use a pregame file; for a provisional score pass --allow-unfinished (the card then says "
-              "LIVE / PROVISIONAL)." % game.get("status"), file=sys.stderr)
+              "post use a pregame file (fetch_game.py --pregame)." % game.get("status"), file=sys.stderr)
         return EXIT_NOT_FINAL
-    if args.photo and not os.path.exists(args.photo):
-        sys.exit("photo not found: %s" % args.photo)
+    if args.photo:
+        if not os.path.isfile(args.photo):
+            sys.exit("photo not found: %s" % args.photo)
+        if not (args.photo_credit or "").strip():
+            sys.exit("--photo needs --photo-credit (every caption ends with the photographer credit)")
     # Inputs that declare AI generation or editing are refused before any pixel
     # is read, so a render never launders an AI marker into a "clean" file.
-    if args.photo:
-        refuse_if_ai(args.photo, "photo")
+    photo_path, credit, focus = pick_photo(game, pregame, args)
+    if not os.path.exists(photo_path):
+        sys.exit("library photo missing: %s" % photo_path)
+    refuse_if_ai(photo_path, "photo")
     for side in ("home", "away"):
         lf = game[side].get("logo_file")
         if lf and not game[side].get("is_us"):
             p = lf if os.path.isabs(lf) else os.path.join(GAME_DIR, lf)
-            if os.path.exists(p):
+            if os.path.isfile(p):
                 refuse_if_ai(p, "logo_file")
-    photo = None
-    if args.photo:
-        try:
-            photo = load_photo(args.photo)
-        except Exception as exc:  # noqa: BLE001
-            sys.exit("could not read photo %s: %s" % (args.photo, exc))
+    try:
+        photo = load_photo(photo_path)
+    except Exception as exc:  # noqa: BLE001
+        sys.exit("could not read photo %s: %s" % (photo_path, exc))
     os.makedirs(args.out, exist_ok=True)
-    # downloaded logos are cached outside the hand-over folder
-    cache = os.path.join(tempfile.gettempdir(), "naadat-result-post-logos")
+    if args.photo:
+        print("photo: %s (credit: %s)" % (photo_path, credit))
+    else:
+        k, n = pick_photo.index
+        print("photo: %s (index %d of 0..%d; credit: %s). For another photo rerun with --photo-index %d"
+              % (os.path.basename(photo_path), k, n - 1, credit, (k + 1) % n))
 
     written = []
 
@@ -2069,20 +1300,20 @@ def main(argv=None):
             written.append(save_clean(im, os.path.join(args.out, name + ".png")))
 
     if pregame:
-        save(pregame_slide(game, cfg, cache, photo), "pregame_feed")
-        if args.story:
-            save(pregame_slide(game, cfg, cache, photo, height=STORY_H), "pregame_story")
+        save(finish(pregame_card(game, photo, focus), 7), "pregame_feed")
     else:
-        save(result_slide(game, cfg, cache, photo), "result_feed")
-        has_log = any(g.get("period") != 5 for g in game.get("goals") or [])
+        save(finish(result_card(game, photo, focus), 7), "result_feed")
+        has_log = bool(log_goals(game)[0])
         if not args.no_summary and not has_log:
-            print("note: no goal log in game.json, so slide 2 (summary) was skipped")
+            print("note: no goal log in %s, so slide 2 (summary) was skipped" % os.path.basename(args.game_json))
         elif not args.no_summary:
-            save(summary_slide(game, cfg, cache), "summary_feed")
-        if args.story:
-            save(result_slide(game, cfg, cache, photo, height=STORY_H), "result_story")
+            save(finish(summary_card(game), 8), "summary_feed")
+    cred = os.path.join(args.out, "photo_credit.txt")
+    with open(cred, "w", encoding="utf-8", newline="") as f:
+        f.write(credit)
     for p in written:
         print("wrote", p)
+    print("wrote", cred)
     return 0
 
 
