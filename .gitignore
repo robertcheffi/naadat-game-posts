@@ -6,3 +6,4 @@ post/
 test/
 game.json
 report.json
+# dist/ is committed on purpose: the upload zip is downloaded from the repo.

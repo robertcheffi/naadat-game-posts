@@ -1,31 +1,42 @@
 # Setup per app
 
-The skill is one folder (`naadat-result-post/`) with `SKILL.md` at its root. It needs Python 3.8+ with Pillow, and for automatic fetching, internet access to `tulospalvelu.leijonat.fi`.
+The skill is one folder (`naadat-result-post/`) with `SKILL.md` at its root. It needs Python 3.8+ with Pillow 8.2 or newer, and for automatic fetching, internet access to `tulospalvelu.leijonat.fi`. Without that access it still works: the assistant asks you for the game report (SKILL.md step 1, "Blocked network"). FCAA games are always entered by hand and need no network.
 
-## Claude (desktop app and claude.ai)
+The commands below use `python`. On macOS and Linux, use `python3` where `python` is not found.
+
+## Claude (claude.ai and the desktop app)
 
 1. Settings > Capabilities: turn on **Code execution and file creation**.
-2. Same page, network access for code execution: allow `tulospalvelu.leijonat.fi` (or all domains). If your plan or admin does not allow this, the skill still works: Claude fetches the one game report with its web tool or asks you to paste it (SKILL.md step 1, "Blocked network").
-3. Settings > Capabilities > Skills: upload `naadat-result-post.zip` (from the repo's `dist/` folder) and switch it on.
+2. Network access for code execution:
+   - Individual plans (Pro, Max): on the same page, turn on **Allow network egress**.
+   - Team and Enterprise: an owner opens Organization settings > Capabilities and picks **Allow network egress to package managers and specific domains**, then adds `tulospalvelu.leijonat.fi`, or picks **All domains**.
+3. Customize > Skills > **+** > **Create skill** > **Upload a skill**, choose `naadat-result-post.zip` (from the repo's `dist/` folder) and switch it on. On Team and Enterprise plans an owner first enables Skills under Organization settings > Plugins & skills (Policy tab).
 4. In a new chat: "Make the result post for last night's Näädät game."
 
 ## Claude Code
 
 ```bash
 cp -r skills/naadat-result-post ~/.claude/skills/
-pip install pillow
+python -m pip install --user -U pillow
 ```
+
+On Windows, copy the `skills\naadat-result-post` folder in File Explorer into `%USERPROFILE%\.claude\skills\` (create the folder if it is missing), then run `python -m pip install --user -U pillow` in a terminal.
 
 ## Codex (CLI, IDE extension, app)
 
 ```bash
-cp -r skills/naadat-result-post ~/.codex/skills/
-pip install pillow
+mkdir -p ~/.agents/skills
+cp -r skills/naadat-result-post ~/.agents/skills/
+python -m pip install --user -U pillow
 ```
 
-Codex's default sandbox blocks the network. Either approve the fetch command when Codex asks, or allow network for the workspace in `~/.codex/config.toml`:
+On Windows, copy the folder in File Explorer into `%USERPROFILE%\.agents\skills\` instead. A repo-level `.agents/skills/` folder works too. Older Codex builds read `~/.codex/skills/` instead.
+
+Codex's default sandbox blocks the network. Either approve the fetch command when Codex asks, or allow network for the workspace in `~/.codex/config.toml` (`network_access` only applies in the `workspace-write` sandbox, so both lines are needed):
 
 ```toml
+sandbox_mode = "workspace-write"
+
 [sandbox_workspace_write]
 network_access = true
 ```
@@ -34,10 +45,28 @@ network_access = true
 
 Upload the zip and say: "Unzip this, read naadat-result-post/SKILL.md and follow it for last night's game." Sandboxes without internet use the "Blocked network" path in SKILL.md step 1.
 
-## Checking an install
+## Installing Pillow
+
+`python -m pip install --user -U pillow` works on most systems. If pip refuses with `externally-managed-environment` (recent Debian, Ubuntu and Homebrew Pythons), use one of:
 
 ```bash
-python scripts/fetch_game.py --list
-python scripts/render_card.py references/example_game.json --out test/
-python scripts/clean_image.py check test/*.jpg
+uv run --with pillow python SKILL_DIR/scripts/render_card.py ...   # no install, uv fetches Pillow per run
+python3 -m venv ~/.venvs/naadat && ~/.venvs/naadat/bin/pip install pillow   # then run the scripts with ~/.venvs/naadat/bin/python
 ```
+
+The distro package (`apt install python3-pil`) is too old on Debian 11 (Pillow 8.1); check with `python -c "import PIL; print(PIL.__version__)"`.
+
+## Checking an install
+
+Run from any folder; `SKILL_DIR` is the installed `naadat-result-post` folder. The output goes to a temporary folder, never into the skill folder (on claude.ai the skill folder is read-only).
+
+```bash
+OUT="$(mktemp -d)"
+python SKILL_DIR/scripts/fetch_game.py --list
+python SKILL_DIR/scripts/render_card.py SKILL_DIR/references/example_game.json --out "$OUT"
+python SKILL_DIR/scripts/clean_image.py check "$OUT"/*.jpg
+```
+
+All three should finish without errors (`--list` needs network), and every `check` line should say `CLEAN`.
+
+On Windows (PowerShell or cmd), make any empty folder instead of using `mktemp`, for example `C:\temp\naadat-check`, and run the same three commands with that folder as the output: `--out C:\temp\naadat-check` for the render, then `check` with the three file names in it (`C:\temp\naadat-check\result_feed.jpg` and so on).

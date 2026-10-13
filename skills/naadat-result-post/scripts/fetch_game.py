@@ -3,18 +3,35 @@
 service (tulospalvelu.leijonat.fi) and write it as a normalized game.json.
 
 Standard library only, so it runs in any sandbox that has Python 3.8+.
+Only III-divisioona games are on the results service. FCAA and other games are
+entered by hand from references/manual_game_template.json; check that file with
+--validate.
 
 Examples:
   python fetch_game.py                      # latest finished game -> game.json
-  python fetch_game.py --list               # recent finished games, newest first
-  python fetch_game.py --game-id 2720857    # a specific game
+  python fetch_game.py --list               # all our games of the season, newest first
+  python fetch_game.py --game-id 2720857    # a specific game (season found automatically)
   python fetch_game.py --date 2026-10-04    # the game played on that date
-
   python fetch_game.py --game-url "https://tulospalvelu.leijonat.fi/game?season=2027&gameid=2720857"
+  python fetch_game.py --validate game.json # check a hand-written game.json
 
-If this sandbox cannot reach the internet, fetch ONE document some other way
-(a web-fetch tool, or the user's browser) and pass it in. The game report is
-enough on its own (about 20 kB):
+The summary line reads Näädät first, for example
+  Wrote game.json: 10.10.2026 Näädät 4-28 KHK (L, away), 32 goals in the log.
+
+Exit codes:
+  0  game.json written, or --validate found nothing to fix
+  1  error (no such game, unreadable input, no network; the message says what to do)
+  2  the game has started but is not final yet (also without --game-id: a newer
+     game than the last final one has been played). Wait for the official result,
+     or pass --allow-unfinished to use it anyway
+  3  --validate printed a WARNING other than a missing logo_file. Fix game.json
+     or ask the user, then run --validate again. Do not render before it exits 0
+     (a missing logo_file alone still exits 0)
+
+If this sandbox cannot reach the internet, a game id is needed (the user can
+copy the game link from tulospalvelu.leijonat.fi). Get the raw JSON text of the
+game report some other way, for example by asking the user to open it in a
+browser and paste or upload it (about 20 kB; a summary is not enough):
   https://tulospalvelu.leijonat.fi/gamereport/getgamereportdata?gameid=<ID>&season=<SEASON>
   python fetch_game.py --report-json report.json
 """
@@ -24,6 +41,7 @@ import argparse
 import datetime as dt
 import json
 import os
+import re
 import sys
 import urllib.error
 import urllib.parse
@@ -31,20 +49,67 @@ import urllib.request
 
 BASE = "https://tulospalvelu.leijonat.fi"
 HERE = os.path.dirname(os.path.abspath(__file__))
+SCRIPT = os.path.abspath(__file__)
 SKILL_DIR = os.path.dirname(HERE)
 CONFIG_PATH = os.path.join(SKILL_DIR, "assets", "brand", "team.json")
+TEMPLATE_PATH = os.path.join(SKILL_DIR, "references", "manual_game_template.json")
+REPORT_TEMPLATE = BASE + "/gamereport/getgamereportdata?gameid=<GAME_ID>&season=<SEASON>"
+MANUAL_HINT = ("Only III-divisioona games are on tulospalvelu.leijonat.fi. For FCAA or other games, "
+               "fill references/manual_game_template.json by hand (SKILL.md step 1, FCAA) and check it "
+               "with --validate.")
 
+EXIT_ERROR, EXIT_NOT_FINAL, EXIT_WARNINGS = 1, 2, 3
 FINAL_STATUSES = {2, 94}  # the site's own JS treats these as a final result
 FINISH_TYPES = {1: "REG", 2: "OT", 3: "SO"}
-# Only codes whose meaning is certain are translated. Others (seen: SR, TV) are
-# kept in "type_raw" and left off the graphics rather than guessed.
-GOAL_TYPES = {
-    "YV": "PP",   # ylivoima, power play
-    "YV2": "PP",
-    "AV": "SH",   # alivoima, short-handed
-    "AV2": "SH",
-    "TM": "EN",   # tyhjä maali, empty net
-}
+# GoalType is a space-separated list of codes, e.g. "YV TM". Only codes whose
+# meaning is certain are translated:
+#   YV/YV2 ylivoima (power play), AV/AV2 alivoima (short-handed), TM tyhjä maali
+#   (empty net), RL rangaistuslaukaus (scored penalty shot), RL0 missed penalty
+#   shot (not a goal), VL voittolaukaus (shootout winner), TV tasavoima (even
+#   strength), SR siirretty rangaistus (delayed penalty). IM is unknown.
+# "type" is only ever '', PP, SH or EN; every other code (TV, SR, RL, VL, IM)
+# gives '' and stays readable in "type_raw".
+# Priority: EN wins over PP/SH, so "YV TM" and "AV TM" are EN. The graphic has room
+# for one tag, and an empty net is what the goal looked like.
+GOAL_TYPES = {"YV": "PP", "YV2": "PP", "AV": "SH", "AV2": "SH", "TM": "EN"}
+GOAL_TYPE_PRIORITY = ("EN", "PP", "SH")
+MISSED_PENALTY_SHOT = "RL0"
+NAME_PARTICLES = {"von", "van", "de", "af", "der", "den", "da", "du", "zu",
+                  "la", "le", "del", "di", "dos", "ten", "ter"}
+# Values from references/manual_game_template.json that must not reach a post.
+PLACEHOLDER_TEAM_NAMES = {"opponent"}
+PLACEHOLDER_PERSON_WORDS = {"esimerkki", "malli", "kuvitteellinen"}
+PLACEHOLDER_FULL_NAMES = {"first last"}
+TEMPLATE_DATE_FALLBACK = "2026-10-15"
+
+
+class NetError(Exception):
+    def __init__(self, url: str, reason: object):
+        super().__init__(f"{url}: {reason}")
+        self.url, self.reason = url, reason
+
+
+class Stop(Exception):
+    """A clean stop with a message for the user and an exit code."""
+
+    def __init__(self, message: str, code: int = EXIT_ERROR):
+        super().__init__(message)
+        self.message, self.code = message, code
+
+
+def setup_streams() -> None:
+    """Never crash on a print of 'Näädät', whatever the console encoding is."""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            try:
+                reconfigure(errors="replace")
+            except Exception:
+                pass
 
 
 def load_config() -> dict:
@@ -52,9 +117,74 @@ def load_config() -> dict:
         return json.load(f)
 
 
-def current_season(today: dt.date) -> int:
+def helsinki_now() -> dt.datetime:
+    """Current Helsinki wall-clock time as a naive datetime, comparable with the
+    kick-off times the service publishes."""
+    try:
+        from zoneinfo import ZoneInfo  # Python 3.9+
+        return dt.datetime.now(ZoneInfo("Europe/Helsinki")).replace(tzinfo=None)
+    except Exception:
+        # Python 3.8 or no tz database: EET is UTC+2, EEST UTC+3. +3 can call a
+        # game started up to an hour early in winter, which only delays a post.
+        return (dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=3)).replace(tzinfo=None)
+
+
+def helsinki_today() -> dt.date:
+    return helsinki_now().date()
+
+
+def season_for(day: dt.date) -> int:
     # Leijonat numbers a season by the year it ends in: 2026-27 is 2027.
-    return today.year + 1 if today.month >= 6 else today.year
+    return day.year + 1 if day.month >= 6 else day.year
+
+
+def fi_date(iso_or_date) -> str:
+    """'2026-10-04' -> '4.10.2026'. Anything unparseable is returned as given."""
+    try:
+        d = iso_or_date if isinstance(iso_or_date, dt.date) else dt.datetime.strptime(str(iso_or_date), "%Y-%m-%d").date()
+    except ValueError:
+        return str(iso_or_date)
+    return f"{d.day}.{d.month}.{d.year}"
+
+
+def network_help(url: str, exc: object, game_id: int = None, season: int = None) -> str:
+    if "/gamereport/getgamereportdata" in url:
+        report = url
+    elif game_id and season:
+        report = report_url(season, game_id)
+    elif game_id:
+        report = None
+    else:
+        report = REPORT_TEMPLATE
+    lines = [
+        f"Could not reach {url}",
+        f"  {exc}",
+        "This sandbox cannot get data from tulospalvelu.leijonat.fi.",
+    ]
+    if game_id:
+        lines.append(f"Offline route for game {game_id}: get the raw JSON text of this game-report URL")
+        lines.append("(a browser shows it; a summarising web-fetch tool is not enough), save it as report.json:")
+        if report:
+            lines.append(f"  {report}")
+            lines.append("  (if it shows \"GamesUpdate\":null, the season is wrong: try the previous year)")
+        else:
+            current = season_for(helsinki_today())
+            lines.append(f"  {report_url(current, game_id)}")
+            lines.append(f"  (a game of last season needs season={current - 1}; the season is the year it ends in)")
+    else:
+        lines += [
+            "Offline route: a game id is needed. Ask the user for the game link from",
+            "tulospalvelu.leijonat.fi (it contains gameid= and season=, season 2026-27 is 2027),",
+            "then get the raw JSON text of this game-report URL (a browser shows it; a",
+            "summarising web-fetch tool is not enough), save it as report.json:",
+            f"  {report}",
+        ]
+    lines += [
+        f'and run:  python "{SCRIPT}" --report-json report.json --out game.json',
+        "Only the game-report URL works with --report-json; the schedule URLs",
+        "(serie/helpers/getsubseries, helpers/getgames) are not its input.",
+    ]
+    return "\n".join(lines)
 
 
 def get_json(path: str, params: dict) -> object:
@@ -63,23 +193,27 @@ def get_json(path: str, params: dict) -> object:
     req = urllib.request.Request(url, headers={"accept": "application/json", "user-agent": "naadat-result-post/1.0"})
     try:
         with urllib.request.urlopen(req, timeout=30) as resp:
-            return json.loads(resp.read().decode("utf-8"))
+            body = resp.read()
     except (urllib.error.URLError, OSError) as exc:
-        sys.exit(
-            f"Could not reach {url}\n  {exc}\n"
-            "This sandbox may block internet access. Fetch this URL with a web-fetch tool,\n"
-            "save the response as JSON and rerun with --games-json / --report-json."
-        )
-
-
-
-def games_url(season: int, subserie_id: int) -> str:
-    return (f"{BASE}/helpers/getgames?dwl=0&season={season}&subSerieId={subserie_id}"
-            "&teamid=0&districtid=0&gamedays=3&dog=&levelid=-1")
+        raise NetError(url, exc)
+    try:
+        return json.loads(body.decode("utf-8"))
+    except ValueError as exc:
+        raise NetError(url, f"the response was not JSON ({exc}); a proxy or block page may be in the way")
 
 
 def report_url(season: int, game_id: int) -> str:
     return f"{BASE}/gamereport/getgamereportdata?gameid={game_id}&season={season}"
+
+
+def report_game(report) -> dict:
+    """GamesUpdate[0] of a report, or None when the report has no game."""
+    if not isinstance(report, dict):
+        return None
+    gu = report.get("GamesUpdate")
+    if not isinstance(gu, list) or not gu or not isinstance(gu[0], dict) or not gu[0].get("Id"):
+        return None
+    return gu[0]
 
 
 def discover_games(cfg: dict, season: int) -> list:
@@ -93,7 +227,9 @@ def discover_games(cfg: dict, season: int) -> list:
     subseries = get_json("serie/helpers/getsubseries",
                          {"season": season, "levelid": lt["level_id"], "districtid": lt["district_id"]})
     found = []
-    for sub in subseries or []:
+    for sub in subseries if isinstance(subseries, list) else []:
+        if not isinstance(sub, dict) or "subSerieId" not in sub:
+            continue
         blocks = get_json("helpers/getgames", {
             "dwl": 0, "season": season, "subSerieId": sub["subSerieId"], "teamid": 0,
             "districtid": 0, "gamedays": 3, "dog": "", "levelid": -1,
@@ -104,43 +240,98 @@ def discover_games(cfg: dict, season: int) -> list:
 
 def team_games(blocks, association_id: int) -> list:
     out = []
-    for block in blocks or []:
-        for g in block.get("Games", []):
+    for block in blocks if isinstance(blocks, list) else []:
+        if not isinstance(block, dict):
+            continue
+        for g in block.get("Games") or []:
+            if not isinstance(g, dict) or not g.get("GameID") or not g.get("GameDate"):
+                continue
             if association_id in (g.get("HomeAssociationID"), g.get("AwayAssociationID")):
                 out.append(g)
     return out
 
 
 def game_datetime(g: dict) -> dt.datetime:
-    return dt.datetime.strptime(f"{g['GameDate']} {g.get('GameTime') or '00:00:00'}", "%d.%m.%Y %H:%M:%S")
+    """Kick-off as naive Helsinki local time, as the service publishes it."""
+    try:
+        return dt.datetime.strptime(f"{g['GameDate']} {g.get('GameTime') or '00:00:00'}", "%d.%m.%Y %H:%M:%S")
+    except (KeyError, TypeError, ValueError):
+        raise Stop(f"Game {g.get('GameID')} has an unreadable date {g.get('GameDate')!r} "
+                   f"{g.get('GameTime')!r} (expected DD.MM.YYYY HH:MM:SS).")
 
 
 def is_final(g: dict) -> bool:
     return g.get("GameStatus") in FINAL_STATUSES and not g.get("DeniedResults")
 
 
+def _cap(word: str) -> str:
+    """'SILLANPÄÄ' -> 'Sillanpää', 'ELONEN-KULMALA' -> 'Elonen-Kulmala', "O'BRIEN" -> "O'Brien".
+    A dotted capital I (Turkish 'İ') lowers to a plain i, not i plus a combining dot."""
+    word = word.replace("İ", "I").replace("̇", "")
+    return "".join(p[:1].upper() + p[1:].lower() for p in re.split(r"([-'’])", word))
+
+
 def person(raw: str) -> dict:
-    """'SILLANPÄÄ Otto' -> first 'Otto', last 'Sillanpää'. Surname tokens are upper case."""
-    raw = (raw or "").strip()
+    """'SILLANPÄÄ Otto' -> first 'Otto', last 'Sillanpää'. Surname tokens are upper case.
+
+    "display" is the form to print when only a last name is wanted: the last name,
+    or the short form when two teammates share it (set per team in normalize)."""
+    raw = (raw or "").strip() if isinstance(raw, str) else ""
     if not raw:
-        return {"full": "", "short": "", "last": "", "first": ""}
+        return {"full": "", "short": "", "last": "", "first": "", "display": ""}
     parts = raw.split()
     last = [p for p in parts if p.isupper() and len(p) > 1] or parts[:1]
     first = [p for p in parts if p not in last]
-    last_s = " ".join(w.capitalize() if "-" not in w else "-".join(x.capitalize() for x in w.split("-")) for w in last)
+    words = []
+    for i, w in enumerate(last):
+        if w.lower() in NAME_PARTICLES and i < len(last) - 1:
+            words.append(w.lower())  # VON SCHOULTZ -> von Schoultz, DE LA CRUZ -> de la Cruz
+        else:
+            words.append(_cap(w))
+    last_s = " ".join(words)
     first_s = " ".join(first)
     full = f"{first_s} {last_s}".strip()
-    short = f"{first_s[:1]}. {last_s}" if first_s else last_s
-    return {"full": full, "short": short, "last": last_s, "first": first_s}
+    if first:
+        # Finnish convention: Veli-Matti -> V-M.
+        initials = "-".join(x[:1] for x in first[0].split("-") if x)
+        short = f"{initials}. {last_s}"
+    else:
+        short = last_s
+    return {"full": full, "short": short, "last": last_s, "first": first_s, "display": last_s}
 
 
-def mmss(seconds: int) -> str:
+def disambiguate_names(name_objs: list) -> None:
+    """Resolve clashes among the name objects of ONE team. Mutates in place.
+
+    short:   two players sharing a short form ('J. Taivalmaa' for Jaakko and
+             Justus) both get their full name as the short form.
+    display: the last name, or the (already disambiguated) short form when two
+             players share the last name ('M. Grundström', 'Jaakko Taivalmaa')."""
+    shorts, lasts = {}, {}
+    for n in name_objs:
+        who = n.get("full") or n.get("short") or n.get("last")
+        if n.get("short"):
+            shorts.setdefault(n["short"], set()).add(who)
+        if n.get("last"):
+            lasts.setdefault(n["last"], set()).add(who)
+    for n in name_objs:
+        if n.get("short") and len(shorts[n["short"]]) > 1 and n.get("full"):
+            n["short"] = n["full"]
+    for n in name_objs:
+        last = n.get("last") or ""
+        n["display"] = (n.get("short") or last) if last and len(lasts[last]) > 1 else (last or n.get("full") or "")
+
+
+def mmss(seconds) -> str:
     """Leijonat logs elapsed game seconds; hockey summaries print them as mm:ss of game time."""
-    seconds = int(seconds or 0)
+    try:
+        seconds = int(seconds or 0)
+    except (TypeError, ValueError):
+        seconds = 0
     return f"{seconds // 60:02d}:{seconds % 60:02d}"
 
 
-def split_pair(text: str):
+def split_pair(text):
     try:
         a, b = str(text).split("-", 1)
         return int(a), int(b)
@@ -148,20 +339,31 @@ def split_pair(text: str):
         return None
 
 
+def goal_type(raw_type: str) -> str:
+    tags = {GOAL_TYPES[t] for t in raw_type.split() if t in GOAL_TYPES}
+    return next((t for t in GOAL_TYPE_PRIORITY if t in tags), "")
+
+
+def result_code(us_goals, them_goals, finish: str, final: bool) -> str:
+    """W, L, OTW, OTL, SOW, SOL, or '' when the game is not final or is tied."""
+    if not final or us_goals is None or them_goals is None or us_goals == them_goals:
+        return ""
+    won = us_goals > them_goals
+    return ("W" if won else "L") if finish == "REG" else finish + ("W" if won else "L")
+
+
 def normalize(g: dict, report: dict, cfg: dict, season: int) -> dict:
     lt = cfg["leijonat"]
     us_home = g["HomeAssociationID"] == lt["association_id"]
-    gu = (report.get("GamesUpdate") or [{}])[0]
-    home_id = gu.get("HomeTeam", {}).get("Id", g["HomeTeam"])
+    gu = report_game(report) or {}
+    home_id = (gu.get("HomeTeam") or {}).get("Id", g["HomeTeam"])
 
     def side(prefix: str, is_us: bool) -> dict:
-        assoc = g[f"{prefix}AssociationID"]
         img = g.get(f"{prefix}Img") or ""
         return {
             "name": cfg["display_name"] if is_us else g[f"{prefix}TeamAbbrv"],
             "source_name": g[f"{prefix}TeamAbbrv"],
-            "association": g.get(f"{prefix}Association", ""),
-            "association_id": assoc,
+            "association_id": g[f"{prefix}AssociationID"],
             "goals": g[f"{prefix}Goals"],
             "is_us": is_us,
             "logo_url": f"{BASE}/images/associations/weblogos/200x200/{img}" if img else None,
@@ -170,8 +372,8 @@ def normalize(g: dict, report: dict, cfg: dict, season: int) -> dict:
     home, away = side("Home", us_home), side("Away", not us_home)
     us, them = (home, away) if us_home else (away, home)
     finish = FINISH_TYPES.get(g.get("FinishedType"), "REG")
-    won = us["goals"] > them["goals"]
-    result = ("W" if won else "L") if finish == "REG" else (finish + ("W" if won else "L"))
+    final = is_final(g)
+    result = result_code(us["goals"], them["goals"], finish, final)
 
     periods = []
     ps = g.get("PeriodSummary") or {}
@@ -181,23 +383,59 @@ def normalize(g: dict, report: dict, cfg: dict, season: int) -> dict:
         periods.append({"label": label, "home": h, "away": a})
 
     goals = []
-    for e in report.get("GameLogsUpdate", []):
-        if e.get("Type") != "Goal":
+    prev_score = (0, 0)
+    for e in report.get("GameLogsUpdate") or []:
+        if not isinstance(e, dict) or e.get("Type") != "Goal":
             continue
+        raw_type = " ".join(str(e.get("GoalType") or "").upper().split())
+        score = (e.get("HomeTeamGoals"), e.get("AwayTeamGoals"))
+        if MISSED_PENALTY_SHOT in raw_type.split():
+            continue  # a missed penalty shot is logged as a "Goal" event but is not one
+        if None not in score:
+            if score == prev_score:
+                continue  # the score did not change, so this event is not a goal
+            prev_score = score
         is_us_goal = (e.get("TeamId") == home_id) == us_home
-        assists = [person(n) for n in (e.get("FirstAssistName"), e.get("SecondAssistName")) if n and n.strip()]
-        raw_type = (e.get("GoalType") or "").strip().upper()
+        assists = [person(n) for n in (e.get("FirstAssistName"), e.get("SecondAssistName"))
+                   if isinstance(n, str) and n.strip()]
+        period = e.get("Period")
+        if "VL" in raw_type.split():
+            # The shootout winner is logged as period 5, 6, or even 2 in short games.
+            # game.json always uses period 5 for it, which every consumer skips.
+            period = 5
         goals.append({
-            "period": e.get("Period"),
+            "period": period,
             "time": mmss(e.get("GameTime")),
             "team": "us" if is_us_goal else "them",
             "scorer": person(e.get("ScorerName")),
             "jersey": e.get("ScorerJersey"),
             "assists": assists,
-            "type": GOAL_TYPES.get(raw_type, ""),
+            "type": goal_type(raw_type),
             "type_raw": raw_type,
-            "score_after": f"{e.get('HomeTeamGoals')}-{e.get('AwayTeamGoals')}",
+            "score_after": f"{score[0]}-{score[1]}",
         })
+
+    goalies = []
+    for team in report.get("GoalkeeperSummary") or []:
+        if not isinstance(team, dict):
+            continue
+        for gk in team.get("TeamGoalkeepers") or []:
+            if not isinstance(gk, dict):
+                continue
+            total = next((s.get("Saves") for s in gk.get("GkSaves") or []
+                          if isinstance(s, dict) and s.get("Period") == 0), None)
+            goalies.append({"team_name": team.get("TeamName"), "name": person(gk.get("GkName")), "saves": total,
+                            "is_us": team.get("TeamName") == us["source_name"]})
+
+    # Name clashes are resolved per team over everyone named in this game.
+    for team, is_us in (("us", True), ("them", False)):
+        objs = []
+        for gl in goals:
+            if gl["team"] == team:
+                objs.append(gl["scorer"])
+                objs.extend(gl["assists"])
+        objs.extend(gk["name"] for gk in goalies if gk["is_us"] == is_us)
+        disambiguate_names(objs)
 
     def leaders(team: str) -> list:
         table = {}
@@ -214,18 +452,19 @@ def normalize(g: dict, report: dict, cfg: dict, season: int) -> dict:
 
     shots = None
     summary = report.get("PeriodSummary") or {}
-    saves_total = next((split_pair(s.get("Saves")) for s in summary.get("PeriodSaves", [])[-1:]), None)
-    if saves_total:
+    saves_rows = [s for s in summary.get("PeriodSaves") or [] if isinstance(s, dict)]
+    saves_total = split_pair(saves_rows[-1].get("Saves")) if saves_rows else None
+    # A game that is not final, or whose saves were never entered ('0-0'), has no
+    # shot count: shots on goal would be just the score.
+    if final and saves_total and saves_total != (0, 0):
         home_saves, away_saves = saves_total
-        home_shots, away_shots = away_saves + home["goals"], home_saves + away["goals"]
+        # The shootout winner's extra goal is in the score but was not a shot on goal
+        # (the saves total leaves the shootout out too).
+        home_so = 1 if finish == "SO" and home["goals"] > away["goals"] else 0
+        away_so = 1 if finish == "SO" and away["goals"] > home["goals"] else 0
+        home_shots = away_saves + home["goals"] - home_so
+        away_shots = home_saves + away["goals"] - away_so
         shots = {"us": home_shots if us_home else away_shots, "them": away_shots if us_home else home_shots}
-
-    goalies = []
-    for team in report.get("GoalkeeperSummary", []):
-        for gk in team.get("TeamGoalkeepers", []):
-            total = next((s["Saves"] for s in gk.get("GkSaves", []) if s.get("Period") == 0), None)
-            goalies.append({"team_name": team.get("TeamName"), "name": person(gk.get("GkName")), "saves": total,
-                            "is_us": team.get("TeamName") == us["source_name"]})
 
     when = game_datetime(g)
     return {
@@ -238,8 +477,8 @@ def normalize(g: dict, report: dict, cfg: dict, season: int) -> dict:
         "series": g.get("SubSerieName", ""),
         "date": when.date().isoformat(),
         "time": when.strftime("%H:%M"),
-        "arena": g.get("RinkName") or gu.get("Arena", ""),
-        "attendance": g.get("Spectator") or gu.get("Spectators"),
+        "arena": gu.get("Arena") or g.get("RinkName") or "",
+        "attendance": g.get("Spectator") or None,  # 0 means not recorded
         "finish": finish,
         "result": result,
         "home": home,
@@ -251,135 +490,572 @@ def normalize(g: dict, report: dict, cfg: dict, season: int) -> dict:
         "scorers_them": leaders("them"),
         "shots": shots,
         "goalies": goalies,
-        "status": "final" if is_final(g) else "not_final",
+        "status": "final" if final else "not_final",
     }
 
 
-def game_from_report(report: dict) -> dict:
-    """Rebuild the schedule entry from a game report, for the offline path."""
-    gu = (report.get("GamesUpdate") or [{}])[0]
+def game_from_report(report: dict, schedule_entry: dict = None) -> dict:
+    """Build the game entry from a game report. Both the online and the offline path
+    use this, so they write the same game.json. A schedule entry, when there is one,
+    only fills fields the report leaves empty and contributes DeniedResults."""
+    s = schedule_entry or {}
+    gu = report_game(report) or {}
     home, away = gu.get("HomeTeam") or {}, gu.get("AwayTeam") or {}
-    rows = (report.get("PeriodSummary") or {}).get("PeriodGoals") or []
+    if not isinstance(home, dict) or not isinstance(away, dict):
+        raise Stop("The game report has an unexpected shape: HomeTeam/AwayTeam are not objects.")
+    ps = report.get("PeriodSummary") or {}
+    if not isinstance(ps, dict):
+        ps = {}
+    rows = [r for r in ps.get("PeriodGoals") or [] if isinstance(r, dict)]
     pairs = [split_pair(r.get("Goals")) for r in rows]
-    played = (report.get("PeriodSummary") or {}).get("PlayedPeriods") or max(len(pairs) - 1, 0)
+    try:
+        played = int(ps.get("PlayedPeriods") or 0)
+    except (TypeError, ValueError):
+        played = 0
+    played = played or max(len(pairs) - 1, 0)
     pairs = [p for p in pairs[:played] if p]
+    spectators = gu.get("Spectators")
     return {
         "GameID": gu.get("Id"),
-        "GameDate": gu.get("StartDate"),
-        "GameTime": gu.get("StartTime") or "00:00:00",
+        "GameDate": gu.get("StartDate") or s.get("GameDate"),
+        "GameTime": gu.get("StartTime") or s.get("GameTime") or "00:00:00",
         "GameStatus": gu.get("GameStatus"),
         "FinishedType": gu.get("FinishedType"),
-        "DeniedResults": 0,
+        "DeniedResults": s.get("DeniedResults", 0),
         "HomeTeam": home.get("Id"), "AwayTeam": away.get("Id"),
         "HomeGoals": home.get("Goals"), "AwayGoals": away.get("Goals"),
-        "HomeTeamAbbrv": home.get("Name", ""), "AwayTeamAbbrv": away.get("Name", ""),
+        "HomeTeamAbbrv": home.get("Name") or s.get("HomeTeamAbbrv", ""),
+        "AwayTeamAbbrv": away.get("Name") or s.get("AwayTeamAbbrv", ""),
         "HomeAssociationID": home.get("AssId"), "AwayAssociationID": away.get("AssId"),
-        "HomeImg": home.get("Image", ""), "AwayImg": away.get("Image", ""),
-        "HomeAssociation": "", "AwayAssociation": "",
-        "RinkName": gu.get("Arena", ""),
-        "Spectator": gu.get("Spectators"),
-        "LevelName": gu.get("LevelName", ""),
-        "SubSerieName": gu.get("SubSerieName", ""),
+        "HomeImg": home.get("Image") or s.get("HomeImg", ""), "AwayImg": away.get("Image") or s.get("AwayImg", ""),
+        "RinkName": gu.get("Arena") or s.get("RinkName", ""),
+        "Spectator": spectators if spectators is not None else s.get("Spectator"),
+        "LevelName": gu.get("LevelName") or s.get("LevelName", ""),
+        "SubSerieName": gu.get("SubSerieName") or s.get("SubSerieName", ""),
         "PeriodSummary": {"PlayedPeriods": len(pairs),
                           "PeriodGoals": {"Home": [p[0] for p in pairs], "Away": [p[1] for p in pairs]}},
     }
 
 
+def load_json_file(path: str, what: str):
+    try:
+        with open(path, encoding="utf-8-sig") as f:
+            return json.load(f)
+    except OSError as exc:
+        raise Stop(f"Could not open {what} {path}: {exc}")
+    except ValueError as exc:
+        raise Stop(f"{what} {path} is not valid JSON: {exc}\n"
+                   "Save the raw response text exactly as the browser shows it.")
+
+
+def load_report(path: str) -> dict:
+    report = load_json_file(path, "--report-json")
+    if report_game(report) is None:
+        raise Stop(f"{path} is not a game report (no GamesUpdate list with a game Id). --report-json takes "
+                   f"the response of\n  {REPORT_TEMPLATE}\n"
+                   "(the schedule URLs getsubseries/getgames are not its input).")
+    return report
+
+
 def parse_game_url(url: str):
     q = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)
     try:
-        return int(q["gameid"][0]), int(q["season"][0]) if "season" in q else None
-    except (KeyError, ValueError):
-        sys.exit(f"Could not read gameid from {url}")
+        return int(q["gameid"][0]), (int(q["season"][0]) if "season" in q else None)
+    except (KeyError, ValueError, IndexError):
+        raise Stop(f"Could not read gameid from {url}")
+
+
+def parse_date(text: str) -> dt.date:
+    try:
+        return dt.datetime.strptime(text.strip(), "%Y-%m-%d").date()
+    except ValueError:
+        raise Stop(f"--date must be YYYY-MM-DD, for example 2026-10-18 (got {text!r}).")
+
+
+def us_view(g: dict, cfg: dict):
+    us_home = g["HomeAssociationID"] == cfg["leijonat"]["association_id"]
+    us_goals, them_goals = (g.get("HomeGoals"), g.get("AwayGoals")) if us_home else (g.get("AwayGoals"), g.get("HomeGoals"))
+    return us_home, us_goals, them_goals
 
 
 def describe(g: dict, cfg: dict) -> str:
-    us_home = g["HomeAssociationID"] == cfg["leijonat"]["association_id"]
-    state = "final" if is_final(g) else ("scheduled" if g.get("GameStatus") == 0 else f"status {g.get('GameStatus')}")
-    score = f"{g['HomeGoals']}-{g['AwayGoals']}" if g.get("GameStatus") else "  -  "
+    """One --list row. The score is Näädät first, then the result from our side."""
+    us_home, us_goals, them_goals = us_view(g, cfg)
+    final = is_final(g)
+    state = "final" if final else ("scheduled" if g.get("GameStatus") == 0 else f"status {g.get('GameStatus')}")
+    score = f"{us_goals}-{them_goals}" if g.get("GameStatus") else "-"
+    res = result_code(us_goals, them_goals, FINISH_TYPES.get(g.get("FinishedType"), "REG"), final)
     venue = "home" if us_home else "away"
-    opp = g["AwayTeamAbbrv"] if us_home else g["HomeTeamAbbrv"]
-    return f"{g['GameID']}  {g['GameDate']} {g['GameTime'][:5]}  {venue:4}  vs {opp:<16} {score:>6}  {state}"
+    opp = g.get("AwayTeamAbbrv" if us_home else "HomeTeamAbbrv") or "?"
+    return f"{g['GameID']}  {g['GameDate']} {(g.get('GameTime') or '')[:5]}  {venue:4}  vs {opp:<16} {score:>6} {res:<3}  {state}"
 
 
-def main(argv=None) -> int:
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--season", type=int, help="Leijonat season number (2026-27 is 2027). Default: current.")
-    ap.add_argument("--game-id", type=int)
-    ap.add_argument("--game-url", help="a tulospalvelu.leijonat.fi game link (has gameid and season)")
-    ap.add_argument("--date", help="YYYY-MM-DD, pick our game played on this date")
-    ap.add_argument("--list", action="store_true", help="list our games and exit")
-    ap.add_argument("--allow-unfinished", action="store_true", help="accept a game that is not marked final")
-    ap.add_argument("--games-json", help="offline: saved response of helpers/getgames")
-    ap.add_argument("--report-json", help="offline: saved response of gamereport/getgamereportdata")
-    ap.add_argument("--out", default="game.json")
-    args = ap.parse_args(argv)
+def short_describe(g: dict, cfg: dict) -> str:
+    us_home = g.get("HomeAssociationID") == cfg["leijonat"]["association_id"]
+    opp = g.get("AwayTeamAbbrv" if us_home else "HomeTeamAbbrv") or "?"
+    return f"game {g['GameID']}, {game_datetime(g).strftime('%d.%m.%Y %H:%M')} {'home' if us_home else 'away'} vs {opp}"
 
-    cfg = load_config()
-    if args.game_url:
-        args.game_id, url_season = parse_game_url(args.game_url)
-        args.season = args.season or url_season
-    season = args.season or current_season(dt.date.today())
 
-    if args.report_json and not args.games_json:
-        with open(args.report_json, encoding="utf-8") as f:
-            report = json.load(f)
-        g = game_from_report(report)
-        if cfg["leijonat"]["association_id"] not in (g["HomeAssociationID"], g["AwayAssociationID"]):
-            sys.exit("This game report is not a game of our club.")
-        if not is_final(g) and not args.allow_unfinished:
-            sys.exit(f"Game {g['GameID']} is not final yet. Pass --allow-unfinished to use it anyway.")
-        return write(normalize(g, report, cfg, season), args.out)
+def logged_goals(data: dict) -> int:
+    return sum(1 for g in data.get("goals") or [] if isinstance(g, dict) and g.get("period") != 5)
 
-    if args.games_json:
-        with open(args.games_json, encoding="utf-8") as f:
-            games = team_games(json.load(f), cfg["leijonat"]["association_id"])
+
+def summary_line(data: dict, verb: str, path: str, us_side: str = None) -> str:
+    """'Wrote game.json: 10.10.2026 Näädät 4-28 KHK (L, away), 32 goals in the log.'"""
+    home = data.get("home") if isinstance(data.get("home"), dict) else {}
+    away = data.get("away") if isinstance(data.get("away"), dict) else {}
+    side = us_side or data.get("us_side")
+    result = data.get("result") or "no result"
+    if side in ("home", "away"):
+        us, them = (home, away) if side == "home" else (away, home)
+        teams = f"{us.get('name')} {us.get('goals')}-{them.get('goals')} {them.get('name')} ({result}, {side})"
     else:
-        games = discover_games(cfg, season)
-    if not games:
-        sys.exit(f"No games found for association {cfg['leijonat']['association_id']} in season {season}.")
-    games.sort(key=game_datetime)
+        teams = (f"home {home.get('name')} {home.get('goals')}-{away.get('goals')} away {away.get('name')} "
+                 f"({result}, Näädät side unknown)")
+    return f"{verb} {path}: {fi_date(data.get('date'))} {teams}, {logged_goals(data)} goals in the log."
 
-    if args.list:
-        for g in reversed(games):
-            print(describe(g, cfg))
-        return 0
 
-    if args.game_id:
-        pick = [g for g in games if g["GameID"] == args.game_id]
-    elif args.date:
-        pick = [g for g in games if game_datetime(g).date().isoformat() == args.date]
-    else:
-        now = dt.datetime.now()
-        pick = [g for g in games if is_final(g) and game_datetime(g) <= now][-1:]
-    if not pick:
-        sys.exit("No matching game. Run with --list to see the schedule.")
-    g = pick[-1]
-    if not is_final(g) and not args.allow_unfinished:
-        sys.exit(f"Game {g['GameID']} is not final yet ({describe(g, cfg)}). "
-                 "Wait for the official result or pass --allow-unfinished.")
-
-    if args.report_json:
-        with open(args.report_json, encoding="utf-8") as f:
-            report = json.load(f)
-    else:
-        report = get_json("gamereport/getgamereportdata", {"gameid": g["GameID"], "season": season})
-
-    return write(normalize(g, report, cfg, season), args.out)
+def goal_log_warning(data: dict):
+    logged = logged_goals(data)
+    try:
+        total = int(data["home"]["goals"]) + int(data["away"]["goals"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if data.get("finish") == "SO":
+        total -= 1  # the shootout winner counts in the score, not in the log
+    if logged != total:
+        return (f"WARNING: the goal log has {logged} goals but the score adds up to {total}. "
+                "Scorer lists may be incomplete; tell the user.")
+    return None
 
 
 def write(data: dict, out: str) -> int:
     with open(out, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
-    them = data["away"] if data["us_side"] == "home" else data["home"]
-    logged = sum(1 for g in data["goals"] if g["period"] != 5)
-    total = data["home"]["goals"] + data["away"]["goals"]
-    print(f"Wrote {out}: {data['date']} {data['home']['name']} {data['home']['goals']}-{data['away']['goals']} "
-          f"{data['away']['name']} ({data['result']}), opponent {them['name']}, {logged} goals in the log.")
-    if data["finish"] != "SO" and logged != total:
-        print(f"WARNING: the goal log has {logged} goals but the score adds up to {total}. "
-              "Scorer lists may be incomplete; tell the user.")
+    print(summary_line(data, "Wrote", out))
+    warning = goal_log_warning(data)
+    if warning:
+        print(warning)
     return 0
+
+
+def build(g: dict, report: dict, cfg: dict, season: int) -> dict:
+    try:
+        return normalize(g, report, cfg, season)
+    except Stop:
+        raise
+    except (KeyError, TypeError, AttributeError, ValueError, IndexError) as exc:
+        raise Stop(f"The game report for game {g.get('GameID')} has an unexpected shape "
+                   f"({type(exc).__name__}: {exc}). Save the raw game-report JSON again, unedited.")
+
+
+def template_date() -> str:
+    try:
+        with open(TEMPLATE_PATH, encoding="utf-8-sig") as f:
+            return str(json.load(f).get("date") or TEMPLATE_DATE_FALLBACK)
+    except Exception:
+        return TEMPLATE_DATE_FALLBACK
+
+
+def name_texts(obj) -> list:
+    """Every string in a name object (or a bare string)."""
+    if isinstance(obj, str):
+        return [obj]
+    if isinstance(obj, dict):
+        return [v for k, v in obj.items() if k in ("full", "short", "last", "first", "display") and isinstance(v, str)]
+    return []
+
+
+def name_label(obj) -> str:
+    return next((t for t in name_texts(obj) if t.strip()), "?")
+
+
+def is_placeholder_name(obj) -> bool:
+    for text in name_texts(obj):
+        low = text.strip().lower()
+        if low in PLACEHOLDER_FULL_NAMES:
+            return True
+        if any(w.strip(".,") in PLACEHOLDER_PERSON_WORDS for w in low.split()):
+            return True
+    return False
+
+
+def validate(path: str) -> int:
+    """Check a game.json (usually hand-written). Exit 0 when clean (a missing logo
+    file alone is fine), 3 on any other warning, 1 when unusable."""
+    try:
+        with open(path, encoding="utf-8-sig") as f:
+            data = json.load(f)
+    except (OSError, ValueError) as exc:
+        print(f"ERROR: could not read {path} as JSON: {exc}", file=sys.stderr)
+        return EXIT_ERROR
+    errors = []
+    if not isinstance(data, dict):
+        errors.append("the file is not a JSON object")
+    else:
+        for key in ("home", "away"):
+            team = data.get(key)
+            if not isinstance(team, dict):
+                errors.append(f"'{key}' is missing or not an object")
+                continue
+            if not str(team.get("name") or "").strip():
+                errors.append(f"'{key}.name' is empty")
+            if not isinstance(team.get("goals"), int) or isinstance(team.get("goals"), bool) or team["goals"] < 0:
+                errors.append(f"'{key}.goals' must be a whole number, got {team.get('goals')!r}")
+        for key in ("goals", "periods", "scorers_us", "scorers_them", "goalies"):
+            value = data.get(key)
+            if value is None:
+                continue
+            if not isinstance(value, list):
+                errors.append(f"'{key}' must be a list, got {type(value).__name__}")
+                continue
+            for i, row in enumerate(value):
+                if not isinstance(row, dict):
+                    errors.append(f"'{key}[{i}]' must be an object like the template shows, got {row!r}")
+        for i, g in enumerate(data.get("goals") if isinstance(data.get("goals"), list) else []):
+            if not isinstance(g, dict):
+                continue
+            if g.get("assists") is not None and not isinstance(g.get("assists"), list):
+                errors.append(f"'goals[{i}].assists' must be a list or null")
+            if not isinstance(g.get("scorer"), (dict, type(None))):
+                errors.append(f"'goals[{i}].scorer' must be a name object {{full, short, last, first}}")
+        for key in ("scorers_us", "scorers_them"):
+            for i, row in enumerate(data.get(key) if isinstance(data.get(key), list) else []):
+                if isinstance(row, dict) and not isinstance(row.get("name"), dict):
+                    errors.append(f"'{key}[{i}].name' must be a name object {{full, short, last, first}}")
+    if errors:
+        for e in errors:
+            print(f"ERROR: {e}", file=sys.stderr)
+        print(f"{path} cannot be used.", file=sys.stderr)
+        return EXIT_ERROR
+
+    warnings = []       # each makes the exit code 3
+    logo_warnings = []  # a missing logo file alone keeps exit 0
+    home, away = data["home"], data["away"]
+    us_side = data.get("us_side")
+    if us_side not in ("home", "away"):
+        flagged = [k for k in ("home", "away") if data[k].get("is_us") is True]
+        warnings.append(f"us_side is {us_side!r}; set it to 'home' or 'away' (it decides the logo order)")
+        us_side = flagged[0] if len(flagged) == 1 else None
+    elif data[us_side].get("is_us") is not True or data["away" if us_side == "home" else "home"].get("is_us"):
+        warnings.append(f"us_side is '{us_side}' but the is_us flags on home/away do not agree")
+
+    date = data.get("date")
+    try:
+        dt.datetime.strptime(str(date), "%Y-%m-%d")
+    except ValueError:
+        warnings.append(f"date {date!r} is not ISO YYYY-MM-DD")
+    if data.get("source") == "manual" and str(date) == template_date():
+        warnings.append(f"date {date} is the template's example date; set the real date of the game")
+
+    for key in ("home", "away"):
+        if str(data[key].get("name") or "").strip().lower() in PLACEHOLDER_TEAM_NAMES:
+            warnings.append(f"{key}.name is the template placeholder {data[key]['name']!r}; "
+                            "use the opponent's real name")
+    placeholders = set()
+    for key in ("scorers_us", "scorers_them"):
+        for row in data.get(key) or []:
+            if is_placeholder_name(row.get("name")):
+                placeholders.add(f"{key}: {name_label(row.get('name'))!r}")
+    for g in data.get("goals") or []:
+        for obj in [g.get("scorer")] + list(g.get("assists") or []):
+            if is_placeholder_name(obj):
+                placeholders.add(f"goals: {name_label(obj)!r}")
+    for gk in data.get("goalies") or []:
+        if is_placeholder_name(gk.get("name")):
+            placeholders.add(f"goalies: {name_label(gk.get('name'))!r}")
+    for p in sorted(placeholders):
+        warnings.append(f"template example name left in ({p}); delete it or use the real name")
+
+    finish = data.get("finish")
+    if finish not in ("REG", "OT", "SO"):
+        warnings.append(f"finish {finish!r} must be REG, OT or SO")
+        finish = "REG"
+    elif finish in ("OT", "SO") and abs(home["goals"] - away["goals"]) != 1:
+        warnings.append(f"finish is {finish} but the margin is {abs(home['goals'] - away['goals'])}; "
+                        "an overtime or shootout game is won by exactly one goal")
+    if us_side:
+        us, them = (home, away) if us_side == "home" else (away, home)
+        final = data.get("status", "final") == "final"
+        expected = result_code(us["goals"], them["goals"], finish, final)
+        if data.get("result", "") != expected:
+            warnings.append(f"result {data.get('result')!r} does not match the score {us['goals']}-{them['goals']} "
+                            f"(Näädät first) and finish {finish}: expected {expected!r}")
+        rows = data.get("scorers_us") or []
+        scored, usable = 0, True
+        for row in rows:
+            try:
+                scored += int(row.get("goals") or 0)
+            except (TypeError, ValueError):
+                usable = False
+                warnings.append(f"scorers_us row {row!r} has no usable goal count")
+        if usable and rows:
+            if scored > us["goals"]:
+                warnings.append(f"scorers_us adds up to {scored} goals but Näädät scored {us['goals']}")
+            elif scored < us["goals"]:
+                warnings.append(f"scorer list incomplete: scorers_us adds up to {scored} goals but Näädät scored "
+                                f"{us['goals']}. Ask the user for the missing scorers, or empty scorers_us "
+                                "if they are unknown (a partial list reads as the whole story)")
+
+    if data.get("goals"):
+        w = goal_log_warning(data)
+        if w:
+            warnings.append(w[len("WARNING: "):])
+
+    periods = [p for p in data.get("periods") or [] if p.get("label") != "SO"]
+    if periods:
+        try:
+            ph, pa = sum(int(p["home"]) for p in periods), sum(int(p["away"]) for p in periods)
+            so_h = 1 if finish == "SO" and home["goals"] > away["goals"] else 0
+            so_a = 1 if finish == "SO" and away["goals"] > home["goals"] else 0
+            if (ph, pa) != (home["goals"] - so_h, away["goals"] - so_a):
+                warnings.append(f"periods add up to {ph}-{pa} but the score is {home['goals']}-{away['goals']}")
+        except (KeyError, TypeError, ValueError):
+            warnings.append("periods need a label, home and away (whole numbers) on every row")
+
+    base = os.path.dirname(os.path.abspath(path))
+    for key in ("home", "away"):
+        logo = data[key].get("logo_file")
+        if logo:
+            resolved = logo if os.path.isabs(str(logo)) else os.path.join(base, str(logo))
+            if not os.path.isfile(resolved):
+                logo_warnings.append(f"{key}.logo_file {logo!r} not found (looked in {resolved}); "
+                                     "the graphic will show a lettered badge")
+
+    print(summary_line(data, "Checked", path, us_side))
+    for w in warnings + logo_warnings:
+        print(f"WARNING: {w}")
+    if warnings:
+        print(f"Fix game.json or ask the user, then run --validate again (exit {EXIT_WARNINGS}).")
+        return EXIT_WARNINGS
+    if not logo_warnings:
+        print("No problems found.")
+    return 0
+
+
+def no_match(what: str, seasons: list, explicit: int = None) -> str:
+    seasons_s = " or ".join(str(s) for s in seasons) if seasons else "the given schedule"
+    msg = f"No Näädät game matches {what} in season {seasons_s}.\n"
+    if explicit:
+        msg += (f"The season may be wrong: a season is numbered by the year it ends in (2026-27 is 2027). "
+                f"Try --season {explicit - 1}, or leave --season out.\n")
+    return msg + f"{MANUAL_HINT}\nRun with --list to see the III-divisioona schedule."
+
+
+def not_final_stop(g: dict, cfg: dict, previous: dict = None) -> Stop:
+    msg = (f"Game {g['GameID']} is not final yet ({describe(g, cfg).strip()}). "
+           "Wait for the official result, or pass --allow-unfinished to use it anyway.")
+    if previous is not None:
+        msg += (f"\nIt is newer than the last final game ({short_describe(previous, cfg)}); "
+                f"to post that one instead, pass --game-id {previous['GameID']}.")
+    return Stop(msg, EXIT_NOT_FINAL)
+
+
+def check_season(explicit: int, g: dict) -> int:
+    """The season to write: from the game date. An explicit season that disagrees
+    is reported and ignored."""
+    derived = season_for(game_datetime(g).date())
+    if explicit and explicit != derived:
+        print(f"warning: --season/link season {explicit} does not match the game date {g['GameDate']} "
+              f"(season {derived}); using {derived}.", file=sys.stderr)
+    return derived
+
+
+def fetch_by_id(args, cfg: dict, explicit: int) -> int:
+    """A known game id: the report carries everything, so fetch it first. The
+    schedule only fills gaps (DeniedResults); if it cannot be reached, go on."""
+    assoc = cfg["leijonat"]["association_id"]
+    if explicit:
+        seasons = [explicit]
+    else:
+        current = season_for(helsinki_today())
+        seasons = [current, current - 1]
+    report, season = None, None
+    for s in seasons:
+        args._help_season = s
+        r = get_json("gamereport/getgamereportdata", {"gameid": args.game_id, "season": s})
+        if report_game(r) is not None:
+            report, season = r, s
+            break
+    if report is None:
+        raise Stop(no_match(f"game id {args.game_id}", seasons, explicit))
+    g = game_from_report(report)
+    if g["GameID"] != args.game_id:
+        raise Stop(f"The results service returned game {g['GameID']} for game id {args.game_id}.")
+    if assoc not in (g["HomeAssociationID"], g["AwayAssociationID"]):
+        raise Stop(f"Game {args.game_id} is not a game of our club.\n{MANUAL_HINT}")
+    season = check_season(explicit, g)
+    entry = None
+    try:
+        entry = next((x for x in discover_games(cfg, season) if x.get("GameID") == args.game_id), None)
+    except NetError as exc:
+        print(f"note: the schedule could not be reached ({exc.reason}); using the game report alone.",
+              file=sys.stderr)
+    merged = game_from_report(report, entry)
+    if not is_final(merged) and not args.allow_unfinished:
+        raise not_final_stop(merged, cfg)
+    return write(build(merged, report, cfg, season), args.out)
+
+
+def run(args) -> int:
+    cfg = load_config()
+    assoc = cfg["leijonat"]["association_id"]
+    day = parse_date(args.date) if args.date else None
+    explicit = args.season
+    if args.game_url:
+        url_id, url_season = parse_game_url(args.game_url)
+        if args.game_id and args.game_id != url_id:
+            raise Stop(f"--game-id {args.game_id} and --game-url (gameid={url_id}) disagree.")
+        args.game_id = url_id
+        explicit = explicit or url_season
+    args._help_season = explicit
+
+    report = load_report(args.report_json) if args.report_json else None
+    if report is not None and args.games_json and not args.game_id and not day:
+        # The report names its game; use it to pick the schedule entry.
+        args.game_id = report_game(report)["Id"]
+
+    if report is not None and not args.games_json:
+        g = game_from_report(report)
+        if assoc not in (g["HomeAssociationID"], g["AwayAssociationID"]):
+            raise Stop("This game report is not a game of our club.")
+        if args.game_id and g["GameID"] != args.game_id:
+            raise Stop(f"The report is for game {g['GameID']}, not the requested {args.game_id}.")
+        if not is_final(g) and not args.allow_unfinished:
+            raise not_final_stop(g, cfg)
+        season = check_season(explicit, g)
+        return write(build(g, report, cfg, season), args.out)
+
+    if args.game_id and not args.games_json and not args.list:
+        return fetch_by_id(args, cfg, explicit)
+
+    if explicit:
+        seasons = [explicit]
+    elif day:
+        seasons = [season_for(day)]
+    else:
+        current = season_for(helsinki_today())
+        seasons = [current, current - 1]
+    if args.games_json:
+        schedule = load_json_file(args.games_json, "--games-json")
+        if not isinstance(schedule, list):
+            raise Stop(f"{args.games_json} is not a helpers/getgames response (expected a JSON list).")
+        sources = [(None, team_games(schedule, assoc))]
+    else:
+        sources = None
+
+    if args.list:
+        for season in seasons:
+            args._help_season = season
+            games = sources[0][1] if sources else discover_games(cfg, season)
+            if games:
+                if not sources:
+                    print(f"Season {season} ({season - 1}-{str(season)[2:]}), newest first, score Näädät first:")
+                for g in sorted(games, key=game_datetime, reverse=True):
+                    print(describe(g, cfg))
+                return 0
+            if sources:
+                break
+        raise Stop(f"No games found for association {assoc} in season {' or '.join(map(str, seasons))}.\n{MANUAL_HINT}")
+
+    if args.game_id:
+        what = f"game id {args.game_id}"
+    elif day:
+        what = f"date {day.isoformat()}"
+    else:
+        what = "'latest finished game'"
+
+    now = helsinki_now()
+    g = None
+    for i, season in enumerate(seasons):
+        args._help_season = season
+        games = sources[0][1] if sources else discover_games(cfg, season)
+        games.sort(key=game_datetime)
+        if args.game_id:
+            pick = [x for x in games if x["GameID"] == args.game_id]
+        elif day:
+            pick = [x for x in games if game_datetime(x).date() == day]
+        else:
+            finals = [x for x in games if is_final(x)]
+            started = [x for x in games if game_datetime(x) <= now]
+            newest = started[-1] if started else None
+            last_final = finals[-1] if finals else None
+            if newest is not None and not is_final(newest) and (
+                    last_final is None or game_datetime(newest) > game_datetime(last_final)):
+                # A newer game has been played but is not final: never fall back
+                # silently to the previous one.
+                if not args.allow_unfinished:
+                    raise not_final_stop(newest, cfg, last_final)
+                pick = [newest]
+            else:
+                pick = finals
+        if pick:
+            g = pick[-1]
+            if i > 0 and not args.game_id:
+                print(f"note: no finished game yet in season {seasons[0]}; using the latest of season {season}.",
+                      file=sys.stderr)
+            break
+        if sources:
+            break
+    if g is None:
+        raise Stop(no_match(what, [] if sources else seasons, explicit))
+    if not is_final(g) and not args.allow_unfinished:
+        raise not_final_stop(g, cfg)
+
+    season = check_season(explicit, g)
+    args._help_season = season
+    args._help_game = g["GameID"]
+    if report is None:
+        report = get_json("gamereport/getgamereportdata", {"gameid": g["GameID"], "season": season})
+        if report_game(report) is None:
+            raise Stop(f"The results service returned no report for game {g['GameID']} season {season}:\n"
+                       f"  {report_url(season, g['GameID'])}")
+    report_id = report_game(report)["Id"]
+    if report_id != g["GameID"]:
+        raise Stop(f"The game report is for game {report_id}, but the schedule picked game {g['GameID']} "
+                   f"({describe(g, cfg).strip()}). Pass --game-id {report_id} to use the report's game, "
+                   f"or save the report of game {g['GameID']}.")
+    merged = game_from_report(report, g)
+    return write(build(merged, report, cfg, season), args.out)
+
+
+def main(argv=None) -> int:
+    setup_streams()
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--season", type=int,
+                    help="Leijonat season number (2026-27 is 2027). Rarely needed: the default comes from "
+                         "--date, the game link or the report, else the current season with a fallback to "
+                         "the previous one. A season that contradicts the game date is reported and ignored.")
+    ap.add_argument("--game-id", type=int, help="a game id; the game report is fetched directly")
+    ap.add_argument("--game-url", help="a tulospalvelu.leijonat.fi game link (has gameid, usually season)")
+    ap.add_argument("--date", help="YYYY-MM-DD, pick our game played on this date")
+    ap.add_argument("--list", action="store_true",
+                    help="list all our games of the season (scheduled ones too), newest first, "
+                         "score Näädät first with the result, and exit")
+    ap.add_argument("--allow-unfinished", action="store_true",
+                    help="accept a game that has started but is not marked final (exit 2 otherwise)")
+    ap.add_argument("--games-json", help="offline: saved response of helpers/getgames (the schedule)")
+    ap.add_argument("--report-json", help="offline: saved response of gamereport/getgamereportdata")
+    ap.add_argument("--validate", metavar="GAME_JSON",
+                    help="check a game.json (e.g. a hand-entered FCAA game), print its summary line and "
+                         "warnings. Exit 0 = clean (a missing logo_file alone is fine), 3 = a WARNING to fix "
+                         "before rendering, 1 = unusable")
+    ap.add_argument("--out", default="game.json")
+    args = ap.parse_args(argv)
+    args._help_season = None
+    args._help_game = None
+
+    if args.validate:
+        return validate(args.validate)
+    try:
+        return run(args)
+    except Stop as stop:
+        print(stop.message, file=sys.stderr)
+        return stop.code
+    except NetError as exc:
+        print(network_help(exc.url, exc.reason, args.game_id or args._help_game, args._help_season),
+              file=sys.stderr)
+        return EXIT_ERROR
 
 
 if __name__ == "__main__":

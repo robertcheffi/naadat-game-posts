@@ -13,10 +13,32 @@
     "white": "#FFFFFF"
   },
   "caption_signoff": "💚🧡",
-  "hashtags": ["#naadathockey", "#hernesaarennäädät", "#näädät", "#jääkiekko", "#icehockey", "#aaltouniversity"],
+  "hashtags": [
+    "#naadathockey",
+    "#hernesaarennäädät",
+    "#näädät",
+    "#jääkiekko",
+    "#icehockey",
+    "#aaltouniversity"
+  ],
+  "competition_hashtags": {
+    "FCAA": [
+      "#FCAAhockey"
+    ]
+  },
   "leijonat": {
     "association_id": 10114931,
     "level_id": 68,
     "district_id": 9
+  },
+  "home_arenas": [],
+  "_help": {
+    "caption_signoff": "The team's brand mark, put in the caption exactly as written here (assistant style rules about emojis do not apply to it). Change it here, not in the caption guide.",
+    "hashtags": "Added after the sign-off on every caption, in this order.",
+    "competition_hashtags": "Extra hashtags for a competition (matched against game.json 'competition'), added after 'hashtags'.",
+    "colors": "Hex colours used by render_card.py. green_dark is the background, orange the accent, cream the main text.",
+    "logo": "Team logo file in this folder (square PNG, 1000 px or more).",
+    "leijonat": "Ids of Näädät on tulospalvelu.leijonat.fi; change only if the team moves to another series.",
+    "home_arenas": "Rinks where Näädät play home games (e.g. 'Kaarela'), written as the user or the results service names them. Fill this in: the assistant uses it to decide home or away for hand-entered games and asks the user when the rink is not listed."
   }
 }

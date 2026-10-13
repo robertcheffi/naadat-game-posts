@@ -8,6 +8,7 @@
   "attendance": null,
   "finish": "REG",
   "result": "W",
+  "status": "final",
   "us_side": "home",
   "home": {
     "name": "Näädät",
@@ -27,20 +28,25 @@
   ],
   "goals": [],
   "scorers_us": [
-    {"name": {"full": "First Last", "short": "F. Last", "last": "Last", "first": "First"}, "goals": 2, "assists": 0}
+    {"name": {"full": "Aatu Esimerkki", "short": "A. Esimerkki", "last": "Esimerkki", "first": "Aatu"}, "goals": 2, "assists": 1},
+    {"name": {"full": "", "short": "", "last": "Malli", "first": ""}, "goals": 2, "assists": null}
   ],
   "scorers_them": [],
   "shots": null,
   "goalies": [],
   "_help": {
-    "finish": "REG, OT or SO",
-    "result": "W, L, OTW, OTL, SOW or SOL, from Näädät's point of view",
-    "us_side": "home or away: which of the two teams is Näädät",
-    "logo_file": "path to the opponent logo (PNG/JPG), relative to where you run render_card.py; omit for a lettered badge",
-    "periods": "optional; delete the list contents if unknown",
-    "goals": "optional goal log for slide 2: {period, time 'mm:ss' elapsed game time, team 'us'|'them', scorer {full, short, last, first}, assists [same shape], type '', 'PP', 'SH' or 'EN', score_after 'home-away'}",
-    "scorers_us": "Näädät scorers; goals > 0 shows them on slide 1. Leave empty if unknown",
-    "shots": "optional {us, them}",
-    "goalies": "optional [{name {full, short, last, first}, saves, is_us}]"
+    "how_to": "Copy this file to game.json in your working folder, replace the example values with what the user told you, delete the example scorers, then run: python SKILL_DIR/scripts/fetch_game.py --validate game.json (SKILL.md step 1, manual path). Exit 0 means nothing to fix; exit 3 means it printed a WARNING: fix the file or ask the user, then run it again. Record only what the user said; never invent names, assists or stats.",
+    "date": "ISO date YYYY-MM-DD",
+    "time": "24-hour HH:MM, or empty if unknown",
+    "finish": "REG, OT or SO (overtime or shootout decided the game)",
+    "result": "from Näädät's point of view: W, L, OTW, OTL, SOW or SOL; empty string if the game is not final",
+    "us_side": "home or away. The home team is listed first on the graphic. Home when the user says so or the rink is in team.json home_arenas; away when the user says so or names the opponent's rink; ask the user if still unclear",
+    "home / away": "name and goals of each team; is_us true for Näädät, false for the opponent. Swap the two blocks and set us_side to away for an away game",
+    "logo_file": "opponent logo file (PNG/JPG), a real file from the user or the club, path relative to the folder that holds game.json (just the file name when it sits next to game.json). Remove the key if there is no logo: the script then draws a lettered badge",
+    "periods": "optional; empty list [] if period scores are unknown",
+    "goals": "optional goal log for slide 2; leave [] if unknown (slide 2 is then skipped). Entry: {period, time 'mm:ss' elapsed game time, team 'us' or 'them', scorer {full, short, last, first}, assists [same shape], type '', 'PP', 'SH' or 'EN', score_after 'home-away'}",
+    "scorers_us": "Näädät scorers; goals > 0 shows them on slide 1. assists is a number, or null when unknown. A player known only by last name gets only 'last' filled and the other name fields empty (see 'Malli'). A partial list is fine when the user knows only some scorers; the graphic marks it as partial. Leave [] if no scorers are known",
+    "shots": "optional {us, them}; null if unknown",
+    "goalies": "optional [{team_name, name {full, short, last, first}, saves, is_us}]; [] if unknown"
   }
 }
