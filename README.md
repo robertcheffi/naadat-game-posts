@@ -2,7 +2,7 @@
 
 An assistant skill that makes Näädät's Instagram posts around every game. Ask your AI assistant (Claude, Codex, ChatGPT and others) for "the game day post for tonight" or "the result post for last night's game", and you get the finished images plus a caption to copy. Every image is Instagram post size (1080x1350).
 
-Home games get a green post and away games an orange one, automatically. Every post shows a real game photo from the skill's own photo library: you never need to send a photo, and the assistant switches photos from game to game.
+Home games get a green post and away games an orange one, automatically; FCAA games use the FCAA navy. When Näädät win, the result post says WIN in big orange letters instead of FINAL. Every post shows a real game photo from the skill's own photo library: you never need to send a photo, and the assistant switches photos from game to game.
 
 **Pre-game post**, for game day:
 
@@ -11,7 +11,7 @@ Home games get a green post and away games an orange one, automatically. Every p
 
 **Post-game post**, after the final horn:
 
-- **Slide 1** (`result_feed.jpg`): FINAL, a game photo, both team logos, the score, date, rink and period scores.
+- **Slide 1** (`result_feed.jpg`): WIN (or FINAL after a loss), a game photo, both team logos, the score, date, rink and period scores.
 - **Slide 2** (`summary_feed.jpg`): every goal with time and assists, shots, power-play goals and goalie saves. Made when the goal log is known.
 - An English caption, ready to copy.
 
@@ -24,6 +24,11 @@ III-divisioona games are read from the official results service, tulospalvelu.le
 | Result, home game | Result, away game |
 |---|---|
 | ![Result post for a home game, green](docs/example_result_home.jpg) | ![Result post for an away game, orange](docs/example_result_away.jpg) |
+
+FCAA games use the FCAA navy:
+
+![FCAA result post, a Näädät win](docs/example_fcaa_result.jpg)
+
 
 | Game day post | Slide 2: goal summary |
 |---|---|
@@ -103,7 +108,7 @@ All team settings live in [`skills/naadat-game-posts/assets/brand/team.json`](sk
 
 - **Team logo**: put the crest as a PNG with a transparent background (about 600 px tall or more) in `assets/brand/` and set its file name in `logo`.
 - **Opponent logo**: for a single post, the user simply attaches the logo in the chat. To keep it for later games, put a PNG in `assets/logos/` named by the club's association id: the number in the link of the club's logo on tulospalvelu.leijonat.fi (for example `10115736.png`). An FCAA team's logo goes in `assets/logos/fcaa/`, named by the team name in lower case with accents removed and every other character turned into `-` (for example `mighty-cocks-green.png`), with a line for it in `assets/logos/fcaa/index.json` (team name as the FCAA app writes it, then the file name).
-- **Colours**: change `GREEN`, `ORANGE` and `CREAM` near the top of `skills/naadat-game-posts/scripts/render_card.py` (home posts use green, away posts orange).
+- **Colours**: change `GREEN`, `ORANGE` and `CREAM` near the top of `skills/naadat-game-posts/scripts/render_card.py` (home posts use green, away posts orange); `FCAA_BG` is the FCAA navy.
 - **Photos**: add a real camera photo the club may use (long edge about 1600 px, saved without metadata) to `assets/photos/` and add an entry for it to `assets/photos/photos.json` with the file name, the photographer credit exactly as it should appear in the caption, the crop centre (`focus`, as fractions of width and height) and the jersey colour. Add the photographer to the photo credits above.
 
 Then rebuild the zip with `python tools/build_zip.py`, commit `dist/naadat-game-posts.zip`, and ask everyone to download the new zip from the link above and upload it again. Claude Code and Codex read the copied skill folder directly, so there a change to that folder applies at once.

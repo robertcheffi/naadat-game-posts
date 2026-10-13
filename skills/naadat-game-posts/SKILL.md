@@ -5,12 +5,12 @@ description: Näädät (@naadathockey) Instagram posts, III-divisioona and FCAA:
 
 # Näädät game posts
 
-Two kinds of Instagram post for a Näädät game. Every image is feed post size (1080x1350, 4:5), green for a home game and orange for an away game (set automatically from `us_side`), with a real game photo from the bundled photo library. Each post comes with an English caption you write from the same data.
+Two kinds of Instagram post for a Näädät game. Every image is feed post size (1080x1350, 4:5), green for a home game and orange for an away game in III-divisioona (set automatically from `us_side`), FCAA navy for every FCAA game, with a real game photo from the bundled photo library. Each post comes with an English caption you write from the same data.
 
 | branch | when | files |
 |---|---|---|
 | **Pre-game** | game day or before: "game day post", "matchday post", "post for tonight's game" | `pregame_feed.jpg`: GAME DAY, photo, both logos, date, face-off time, rink |
-| **Post-game** | after the final horn: "result post", "final score", "recap" | `result_feed.jpg` (slide 1: FINAL, photo, both logos, score, date, rink, periods) and `summary_feed.jpg` (slide 2: goal log, shots, power-play goals, goalie saves) |
+| **Post-game** | after the final horn: "result post", "final score", "recap" | `result_feed.jpg` (slide 1: WIN when Näädät win, otherwise FINAL; photo, both logos, score, date, rink, periods) and `summary_feed.jpg` (slide 2: goal log, shots, power-play goals, goalie saves) |
 
 Pick the branch from the user's words. A game still to be played is pre-game; a finished game is post-game. If the request fits neither clearly ("post for the KHK game"), ask which one.
 
@@ -192,7 +192,7 @@ The script picks the photo itself, stepping through the library game by game, an
 
 Opponent logos come from `logo_file` (relative to the folder of `DATA`), then `logo_asset` (a bundled file under `assets/logos/`, set by `fcaa.py`), then `assets/logos/<association_id>.png`, then the results service, then a lettered badge.
 
-**Done when** the script has printed a `wrote` line for every file of your branch (post-game without a goal log: `result_feed.jpg` plus a `note:` that slide 2 was skipped), a `photo:` line, every `note: no logo for <team>, using a lettered badge` and `warning: logo_file ... not found` has been passed to the user so they can send a logo, and you have looked at the first image yourself (`pregame_feed.jpg` or `result_feed.jpg`), checking that every name, number, time and logo is right, the background is green for home and orange for away, and nothing is clipped.
+**Done when** the script has printed a `wrote` line for every file of your branch (post-game without a goal log: `result_feed.jpg` plus a `note:` that slide 2 was skipped), a `photo:` line, every `note: no logo for <team>, using a lettered badge` and `warning: logo_file ... not found` has been passed to the user so they can send a logo, and you have looked at the first image yourself (`pregame_feed.jpg` or `result_feed.jpg`), checking that every name, number, time and logo is right, the background is green for home and orange for away (navy for FCAA), the title reads WIN for a Näädät win and FINAL otherwise, and nothing is clipped.
 
 ### 3. Verify the files are clean
 

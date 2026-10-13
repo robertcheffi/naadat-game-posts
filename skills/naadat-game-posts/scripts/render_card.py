@@ -16,7 +16,8 @@ Outputs, all 1080x1350 and metadata-free (see clean_image.py):
   always      <out>/photo_credit.txt   the credit of the photo used, nothing else
 
 Look: a club poster. A home game is green, an away game orange (from
-us_side). A graded photo panel on the left, the title set vertically on the
+us_side); every FCAA game is FCAA navy. A Näädät win reads WIN, not FINAL.
+A graded photo panel on the left, the title set vertically on the
 right, square logo tiles overlapping the photo edge with the scores beside
 them, and a ruled info row at the foot. Anton for display type, Barlow for
 text and labels.
@@ -143,6 +144,7 @@ CREAM = (238, 235, 225)
 GREEN = (11, 51, 30)
 ORANGE = (247, 137, 42)
 AWAY_BG = (240, 130, 38)
+FCAA_BG = (6, 33, 60)           # FCAA navy (fcaahockey.app background, lifted a step for print)
 
 
 def mix(a, b, t):
@@ -174,7 +176,26 @@ THEMES = {
         "loser": mix(AWAY_BG, GREEN, 0.72),
         "duo_dark": (8, 34, 20), "duo_light": (252, 238, 220),
     },
+    "fcaa": {
+        "bg": FCAA_BG, "accent": ORANGE, "text": CREAM, "on_accent": GREEN,
+        "panel": mix(FCAA_BG, (0, 0, 0), 0.38),
+        "title": mix(FCAA_BG, (110, 160, 220), 0.52),
+        "board": mix(FCAA_BG, (0, 0, 0), 0.32),
+        "contour": mix(FCAA_BG, (100, 150, 210), 0.20),
+        "rule": mix(FCAA_BG, CREAM, 0.24),
+        "dim": mix(FCAA_BG, CREAM, 0.66),
+        "faint": mix(FCAA_BG, CREAM, 0.52),
+        "loser": mix(FCAA_BG, CREAM, 0.42),
+        "duo_dark": (2, 14, 28), "duo_light": (240, 244, 250),
+    },
 }
+
+
+def theme_of(game):
+    """'fcaa' for every FCAA game (league blue); otherwise 'home' green or 'away' orange."""
+    if (game.get("source") or "").lower() == "fcaa" or (game.get("competition") or "").upper() == "FCAA":
+        return "fcaa"
+    return "away" if game.get("us_side") == "away" else "home"
 
 
 # ------------------------------------------------------------------ type
@@ -891,13 +912,14 @@ def weekday_title(i, style="short"):
 # ------------------------------------------------------------------ result card
 
 def result_card(game, photo, focus):
-    theme = "away" if game.get("us_side") == "away" else "home"
+    theme = theme_of(game)
     t = THEMES[theme]
     img = background(theme, 11)
     photo_panel(img, t, photo, focus)
     final = is_final(game)
     fin = finish_word(game)
-    parts = [("FINAL" if final else "LIVE", t["title"])]
+    won_it = final and winner_side(game) == game.get("us_side", "home")
+    parts = [("WIN" if won_it else ("FINAL" if final else "LIVE"), t["accent"] if won_it else t["title"])]
     if final and fin:
         parts.append((fin, t["accent"]))
     vertical_title(img, parts, W - M, PHOTO[1], TILE_Y1 - TITLE_GAP - PHOTO[1], W - M - PHOTO[2] - 34)
@@ -932,7 +954,7 @@ def result_card(game, photo, focus):
 # ------------------------------------------------------------------ pregame card
 
 def pregame_card(game, photo, focus):
-    theme = "away" if game.get("us_side") == "away" else "home"
+    theme = theme_of(game)
     t = THEMES[theme]
     img = background(theme, 12)
     photo_panel(img, t, photo, focus)
@@ -954,7 +976,7 @@ def pregame_card(game, photo, focus):
     d.text((SCORE_X, TILE_Y2 + TILE - 14), tm, font=f, fill=t["accent"], anchor="ls")
 
     top_row(img, t, game.get("competition") or "",
-            [("HOME GAME" if theme == "home" else "AWAY GAME", t["text"])])
+            [("AWAY GAME" if game.get("us_side") == "away" else "HOME GAME", t["text"])])
     info_row(img, t, [("HOME", [(home.get("name") or "", t["text"])]),
                       ("AWAY", [(away.get("name") or "", t["text"])]),
                       ("ARENA", [(game.get("arena") or "", t["text"])])], INFO_Y)
@@ -1136,7 +1158,7 @@ STATS_Y = 1136                       # rule above the stats band of the summary
 
 
 def summary_card(game):
-    theme = "away" if game.get("us_side") == "away" else "home"
+    theme = theme_of(game)
     t = THEMES[theme]
     img = background(theme, 13)
     d = ImageDraw.Draw(img)
