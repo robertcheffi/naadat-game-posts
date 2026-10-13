@@ -1006,11 +1006,13 @@ def validate(path: str) -> int:
                 usable = False
                 warnings.append(f"scorers_us row {name_label(row.get('name'))!r} has no usable goal count "
                                 f"({row.get('goals')!r})")
+        # A shootout win adds one goal to the final score that no player scored in the game.
+        counted = us["goals"] - (1 if finish == "SO" and us["goals"] > them["goals"] else 0)
         if usable and rows:
             if scored > us["goals"]:
                 warnings.append(f"scorers_us adds up to {scored} goals but Näädät scored {us['goals']}")
-            elif scored < us["goals"]:
-                notes.append(f"partial scorer list: scorers_us adds up to {scored} of Näädät's {us['goals']} "
+            elif scored < counted:
+                notes.append(f"partial scorer list: scorers_us adds up to {scored} of Näädät's {counted} "
                              "goals. That is fine when the user knows only these; the graphic marks the list "
                              "as partial. Tell the user.")
 

@@ -1,6 +1,8 @@
 # Setup per app
 
-The skill is one folder (`naadat-game-posts/`) with `SKILL.md` at its root. It needs Python 3.8+ with Pillow 8.2 or newer, and for automatic fetching, internet access to `tulospalvelu.leijonat.fi`. Without that access it still works: the assistant asks you for the game report (SKILL.md, "Blocked network"). FCAA games are always entered by hand and need no network.
+The skill is one folder (`naadat-game-posts/`) with `SKILL.md` at its root. It needs Python 3.8+ with Pillow 8.2 or newer, and for automatic fetching of III-divisioona games, internet access to `tulospalvelu.leijonat.fi`. Without that access it still works: the assistant asks you for the game report (SKILL.md, "Blocked network").
+
+FCAA games come from the FCAA stats app (fcaahockey.app), which lets only a real browser in: scripts and sandboxes get a "Vercel Security Checkpoint" page, so adding `fcaahockey.app` to the allowed domains does not help. An assistant with a browser tool (Claude in Chrome, or the browser built into the Claude desktop app) reads the app itself; any other assistant asks you to open the game in the app and paste the page text in the chat (SKILL.md, "FCAA games").
 
 The commands below use `python`. On macOS and Linux, use `python3` where `python` is not found.
 

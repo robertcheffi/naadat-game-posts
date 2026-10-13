@@ -18,7 +18,7 @@
   },
   "_help": {
     "how_to": "Copy this file to pregame.json in your working folder and replace every placeholder (YYYY-MM-DD, HH:MM, Opponent) and the example values with what the user told you, then run: python SKILL_DIR/scripts/fetch_game.py --validate pregame.json (SKILL.md, pre-game step 1, manual path). --validate exits 3 while a placeholder is still in place. Record only what the user said; never invent a time or a rink.",
-    "competition": "FCAA, or another competition name as the user gives it (III-divisioona games come from fetch_game.py --next instead)",
+    "competition": "FCAA, or another competition name as the user gives it. III-divisioona games come from fetch_game.py --next, and FCAA games from fcaa.py pregame whenever the FCAA app data can be read (SKILL.md, FCAA games); this template is the last resort",
     "date": "ISO date of the game, today or later; replace the placeholder YYYY-MM-DD",
     "time": "face-off time, 24-hour HH:MM (e.g. 21:00); replace the placeholder. Ask the user if unknown: the time is the point of the post",
     "weekday": "optional three-letter weekday, e.g. SUN; --validate warns when it does not match date. Leave it empty to use the weekday of date",

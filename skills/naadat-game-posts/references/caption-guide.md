@@ -6,7 +6,7 @@ English. Written as the team account speaking to its own fans: warm, a little ch
 
 1. `caption_signoff` from `assets/brand/team.json`. The sign-off is the team's brand mark: copy it exactly as written in `team.json`, emojis included.
 2. A blank line, then the photo credit: `📸 ` followed by the exact contents of `photo_credit.txt` from the render's output folder (for example `📸 @vanninenphotos`). Every post shows a library photo, so every caption carries this line; after a rerun with `--photo-index`, take the credit from the new file. The `📸 ` prefix is part of the team's caption format, like the sign-off: write it exactly as shown, whatever your own style rules say about emojis.
-3. A blank line, then `hashtags`, then any `competition_hashtags` for the game's `competition` (for FCAA games that puts `#FCAAhockey` last).
+3. A blank line, then `hashtags`, then any `competition_hashtags` for the game's `competition`. For an FCAA game (`competition` is `FCAA`) that puts `#FCAAhockey` last, always.
 
 Then follow the section for your branch: [Pre-game](#pre-game) or [Post-game](#post-game).
 
@@ -39,14 +39,14 @@ Only facts present in `game.json` or given by the user.
 ### Shape
 
 1. **Hook line**: the result in one sentence with the score and opponent. Wins can celebrate; losses stay honest and forward-looking.
-2. **Story** (1-3 short sentences, optional for a loss by 4+): how the game went, from the data. Good material: period swings (`periods`), a comeback or a late winner (`goals[].time`, `score_after`), overtime or shootout (`finish`), multi-goal or multi-point games (`scorers_us`), a big goalie night (`goalies[].saves`).
+2. **Story** (1-3 short sentences, optional for a loss by 4+): how the game went, from the data. Good material: period swings (`periods`), a comeback or a late winner (`goals[].time`, `score_after`), overtime or shootout (`finish`), multi-goal or multi-point games (`scorers_us`), special-teams goals (`goals[].type`), a big goalie night (`goalies[].saves`).
 3. **Shout-outs**: name the standout Näädät players with their line. Use what the data holds:
    - full name known and `assists` is a number: full name plus `G+A`, e.g. "Aatu Esimerkki 3+1";
    - only the last name known, or `assists` is `null`: the name as given plus the goal count, e.g. "two goals from Malli". Never write `G+A` when assists are unknown, and never add a first name the data lacks.
 4. **Next up** only if the user tells you the next game; the data does not carry it.
 5. **Sign-off**, **photo credit** and **hashtags** last, as described at the top.
 
-Length: 40-90 words before the sign-off, for every result including a loss by 4+ (keep that one near 40). A game without a goal log (most FCAA games) has less to tell: about 30 words is enough there. The graphic already carries the numbers, so the caption tells the story around them.
+Length: 40-90 words before the sign-off, for every result including a loss by 4+ (keep that one near 40). A game without a goal log (a hand-entered game) has less to tell: about 30 words is enough there. The graphic already carries the numbers, so the caption tells the story around them.
 
 To reach the length, use the data first. Beyond that, only lines that state no fact: "Proud of this group.", "On to the next one!", "Thanks for the support!", "Plenty to learn from this one." Atmosphere, crowd mood, attendance, injuries, the opponent's form and anything else the data does not hold stay out unless the user said it.
 
@@ -55,17 +55,19 @@ To reach the length, use the data first. Beyond that, only lines that state no f
 | result | angle |
 |---|---|
 | W | confident, credit the group, name the heroes |
-| OTW / SOW | drama, nerves, "extra time", the hero of OT/SO |
+| OTW / SOW | drama, nerves, "extra time" (OT) or "the shootout" (SO), the hero of OT/SO |
 | OTL / SOL | close one, fight shown, came within a goal |
 | L by 1-3 | close game, what went right, on to the next |
 | L by 4+ | short and gracious: credit effort, a positive (goalie saves, a first goal of the season), look ahead. No excuses, no blaming referees |
+
+FCAA plays no overtime: a tied FCAA game goes straight to a shootout, so an FCAA result is W, L, SOW or SOL and an FCAA caption never mentions overtime.
 
 ### Facts to get right
 
 - `home` / `away` are the teams as listed by the results service (or entered by hand); `us_side` says which one is Näädät. The score is written Näädät-first in the caption ("Näädät took a 7-6 win over ...", "... fell 3-9 to ...").
 - Scorer names come from `scorers_us[].name`: `full` when it is filled, otherwise `last`. Never add goals, assists or saves that are not in the data.
 - When `scorers_us` adds up to fewer goals than Näädät scored, the list is partial: name the known scorers ("goals from Esimerkki and Malli") without implying they scored all of them.
-- Standings and points ("two points", "top of the table") only when the user states them; `game.json` carries neither.
+- Standings and points ("two points", "top of the table", "three points") only when the user states them; `game.json` carries neither. This holds for FCAA too, although the FCAA app shows a points legend.
 - `type` on a goal: PP power play, SH short-handed, EN empty net.
 - Times in `goals[].time` are elapsed game time (`43:10` is 3:10 into the third period).
 - Tag an opponent account only when the user gives its handle.
@@ -87,10 +89,10 @@ Win, III-divisioona, full data:
 >
 > #naadathockey #hernesaarennäädät #näädät #jääkiekko #icehockey #aaltouniversity
 
-Win, FCAA, hand-entered with last names and goals only:
-> Näädät take a 5-2 win over the Harbour Hawks in FCAA play!
+Shootout win, FCAA, from the FCAA stats app:
+> Näädät take it in the shootout! A 5-4 SO win over the Harbour Hawks in FCAA play.
 >
-> Esimerkki and Malli scored two goals each, and Kuvitteellinen added one more. Three different scorers and a three-goal margin at the final horn.
+> Down 2-4 after two, Näädät came back in the third. Aatu Esimerkki scored twice (2+1) and Onni Malli tied it with a power-play goal late in the third.
 >
 > Proud of this group. On to the next one!
 >

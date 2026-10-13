@@ -31,12 +31,17 @@
     "level_id": 68,
     "district_id": 9
   },
+  "fcaa": {
+    "team_id": "team:1758726133829:1mayp7m6o",
+    "name": "Näädät"
+  },
   "_help": {
     "caption_signoff": "The team's brand mark, put in the caption exactly as written here (assistant style rules about emojis do not apply to it). Change it here, not in the caption guide.",
     "hashtags": "Added on every caption (pre-game and post-game) after the sign-off and the photo credit line, in this order.",
     "competition_hashtags": "Extra hashtags for a competition (matched against game.json 'competition'), added after 'hashtags'.",
     "colors": "Brand palette for reference. render_card.py draws with its own GREEN, ORANGE and CREAM constants near the top of scripts/render_card.py (home games green, away games orange, from us_side); change those to recolour the posts and keep this list in step.",
-    "logo": "Team logo file in this folder (square PNG, 1000 px or more).",
-    "leijonat": "Ids of Näädät on tulospalvelu.leijonat.fi; change only if the team moves to another series."
+    "logo": "Team crest in this folder: the cut-out N (green body, orange outline) on a transparent background, about 600 px tall. render_card.py sets it on a square tile (orange when Näädät won, the dark panel colour otherwise) and adds a dark green keyline round it on orange tiles. Opponent logos live in assets/logos/ (FCAA teams in assets/logos/fcaa/, see index.json there).",
+    "leijonat": "Ids of Näädät on tulospalvelu.leijonat.fi; change only if the team moves to another series.",
+    "fcaa": "Näädät on fcaahockey.app (FCAA). Näädät is matched by the name 'Näädät' or this team id."
   }
 }

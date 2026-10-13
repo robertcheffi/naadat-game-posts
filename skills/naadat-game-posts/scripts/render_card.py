@@ -34,7 +34,8 @@ A game that is not final is refused (exit 2) unless --allow-unfinished is
 given; that card then says LIVE / PROVISIONAL, never FINAL. A photo or
 logo_file that declares AI generation or editing (IPTC DigitalSourceType,
 C2PA) is refused with exit code 4. logo_file paths resolve relative to the
-folder of the JSON file. Downloaded logos are cached in the system temp
+folder of the JSON file; logo_asset paths (FCAA: 'fcaa/<slug>.png') resolve
+under assets/logos and come next, before association_id. Downloaded logos are cached in the system temp
 folder, never inside --out. Everything is drawn with Pillow (8.2+) from real
 data, bundled fonts, real logo files and real photos; no generative AI.
 
@@ -64,7 +65,9 @@ import datetime as dt  # noqa: E402
 import json  # noqa: E402
 import os  # noqa: E402
 import random  # noqa: E402
+import re  # noqa: E402
 import tempfile  # noqa: E402
+import unicodedata  # noqa: E402
 import urllib.request  # noqa: E402
 import zlib  # noqa: E402
 
@@ -420,19 +423,74 @@ def team_logo(team):
     return _LOGOS[key]
 
 
+LOGO_DIR = os.path.join(ASSETS, "logos")
+
+
+def slug(name):
+    """fcaahockey.app logo slug: lowercased, accents stripped, other characters -> '-'."""
+    s = unicodedata.normalize("NFKD", str(name or "")).encode("ascii", "ignore").decode("ascii").lower()
+    return re.sub(r"[^a-z0-9]+", "-", s).strip("-")
+
+
+def _inside_logos(rel):
+    """Absolute path of rel under assets/logos, or None if it would leave that folder."""
+    root = os.path.normpath(LOGO_DIR)
+    p = os.path.normpath(os.path.join(root, str(rel).replace("\\", "/")))
+    try:
+        return p if os.path.commonpath([p, root]) == root else None
+    except ValueError:          # another drive on Windows
+        return None
+
+
+def _fcaa_index():
+    if "_fcaa" not in _LOGOS:
+        try:
+            idx = load_json(os.path.join(LOGO_DIR, "fcaa", "index.json"))
+        except (OSError, ValueError):
+            idx = {}
+        _LOGOS["_fcaa"] = {slug(k): v for k, v in idx.items()
+                           if not k.startswith("_") and isinstance(v, str)}
+    return _LOGOS["_fcaa"]
+
+
+def asset_logo(team):
+    """Path of the team's logo under assets/logos from 'logo_asset' (e.g. 'fcaa/hc-lumikot.png').
+
+    A logo_asset that is missing falls back to assets/logos/fcaa/index.json, matched
+    by the slug of the file name and then of the team name (PUS-Hockey maps to its
+    III-divisioona logo there)."""
+    rel = team.get("logo_asset")
+    if not rel:
+        return None
+    p = _inside_logos(rel)
+    if p and os.path.isfile(p):
+        return p
+    idx = _fcaa_index()
+    for key in (slug(os.path.splitext(os.path.basename(str(rel)))[0]), slug(team.get("name"))):
+        if key in idx:
+            q = _inside_logos(os.path.join("fcaa", idx[key]))
+            if q and os.path.isfile(q):
+                return q
+    print("warning: logo_asset for %s not found under assets/logos: %s" % (team.get("name"), rel), file=sys.stderr)
+    return None
+
+
 def _find_logo(team):
     name = team.get("name") or "opponent"
     if team.get("is_us"):
         p = os.path.join(ASSETS, "brand", CFG.get("logo") or "naadat_n_logo.png")
         return Image.open(p).convert("RGBA"), "brand"
     candidates = []
-    lf = team.get("logo_file")
+    lf = team.get("logo_file")          # a file the user supplied wins over the bundled ones
     if lf:
         p = lf if os.path.isabs(lf) else os.path.join(GAME_DIR, lf)
         if os.path.exists(p):
             candidates.append(p)
         else:
             print("warning: logo_file for %s not found: %s" % (name, p), file=sys.stderr)
+    ap_ = asset_logo(team)              # bundled logo, e.g. FCAA: fcaa/<slug>.png
+    if ap_:
+        candidates.append(ap_)
     if team.get("association_id"):
         candidates.append(os.path.join(ASSETS, "logos", "%s.png" % team["association_id"]))
     for c in candidates:
@@ -476,20 +534,51 @@ def abbrev(name):
     return out if len(out) >= 2 else "OPP"
 
 
+_MARKS = {}
+BRAND_RING = (6, 30, 17)             # keyline round our N where its orange outline meets an orange tile
+
+
+def brand_mark(logo, s, fill):
+    """Our crest (a cut-out N: green body, orange outline) centred on an s x s tile.
+
+    The N fills 82 % of the tile height. Where the tile is about as light as the N's
+    own outline (an orange tile: a win at home, any tile on an away card), a dark
+    green keyline is set round the N so its outline still separates from the tile."""
+    key = (id(logo), s, tuple(fill))
+    if key in _MARKS:
+        return _MARKS[key]
+    box = int(round(s * 0.82))
+    lg = logo.copy()
+    k = box / max(lg.size)
+    lg = lg.resize((max(1, int(round(lg.width * k))), max(1, int(round(lg.height * k)))), LANCZOS)
+    a = lg.getchannel("A")
+    # colour of the outermost ring of the mark (its outline)
+    inner = a.filter(ImageFilter.MinFilter(5))
+    rgb_b, a_b, i_b = lg.convert("RGB").tobytes(), a.tobytes(), inner.tobytes()
+    ring = [tuple(rgb_b[3 * i:3 * i + 3]) for i in range(len(a_b)) if a_b[i] > 200 and i_b[i] < 64]
+    ring_lum = sum(lum(p) for p in ring) / len(ring) if ring else 0
+    out = Image.new("RGBA", (s, s), (0, 0, 0, 0))
+    ox, oy = (s - lg.width) // 2, (s - lg.height) // 2
+    if abs(ring_lum - lum(fill)) < 60:
+        grow = max(3, int(s * 0.03)) | 1
+        edge = Image.new("L", (s, s), 0)
+        edge.paste(a, (ox, oy))
+        edge = edge.filter(ImageFilter.MaxFilter(2 * grow + 1)).filter(ImageFilter.GaussianBlur(0.7))
+        keyline = Image.new("RGBA", (s, s), BRAND_RING + (0,))
+        keyline.putalpha(edge)
+        out.alpha_composite(keyline)
+    out.alpha_composite(lg, (ox, oy))
+    _MARKS[key] = out
+    return out
+
+
 def tile(img, team, x, y, s, fill, t):
-    """Square logo tile. Our crest is itself an orange tile, so it fills the tile."""
+    """Square logo tile: the tile colour, then the logo (or a lettered badge) on it."""
     d = ImageDraw.Draw(img)
     logo, kind = team_logo(team)
     if kind == "brand":
-        if fill == ORANGE:
-            img.alpha_composite(logo.resize((s, s), LANCZOS), (x, y))
-        else:
-            d.rectangle((x, y, x + s - 1, y + s - 1), fill=fill)
-            inset = int(s * 0.08)
-            img.alpha_composite(logo.resize((s - 2 * inset, s - 2 * inset), LANCZOS), (x + inset, y + inset))
-        if t["bg"] != GREEN and fill != GREEN:
-            # orange crest on an orange page: a green keyline keeps it a tile
-            d.rectangle((x, y, x + s - 1, y + s - 1), outline=GREEN, width=3)
+        d.rectangle((x, y, x + s - 1, y + s - 1), fill=fill)
+        img.alpha_composite(brand_mark(logo, s, fill), (x, y))
         return
     d.rectangle((x, y, x + s - 1, y + s - 1), fill=fill)
     if logo is None:
@@ -1223,7 +1312,8 @@ def finish(img, seed):
 
 
 def is_pregame(game):
-    return str(game.get("schema") or "").startswith("naadat-game-posts/pregame")
+    # naadat-result-post/... is the schema name of files written before the skill was renamed
+    return str(game.get("schema") or "").startswith(("naadat-game-posts/pregame", "naadat-result-post/pregame"))
 
 
 def main(argv=None):
