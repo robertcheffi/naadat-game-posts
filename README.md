@@ -1,19 +1,27 @@
-# Näädät result post
+# Näädät game posts
 
-An assistant skill that makes the Instagram post after every Näädät game. Ask your AI assistant (Claude, Codex, ChatGPT and others) for "the result post for last night's game" and you get:
+An assistant skill that makes Näädät's Instagram posts around every game. Ask your AI assistant (Claude, Codex, ChatGPT and others) for "the game day post for tonight" or "the result post for last night's game". Every image is in Instagram post size (1080x1350).
 
-- **Slide 1** (`result_feed.jpg`, 1080x1350): FINAL, both team logos, the score, period scores, shots and Näädät's goal scorers.
-- **Slide 2** (`summary_feed.jpg`, 1080x1350): every goal with time and assists, shots and goalie saves. Made when the goal log is known.
-- **Story** (`result_story.jpg`, 1080x1920): slide 1 in story format.
-- **Caption**: an English caption with the team sign-off and hashtags, ready to copy.
+**Pre-game post**, for game day:
 
-III-divisioona games are read from the official results service, tulospalvelu.leijonat.fi. FCAA games are not on that service, so you tell the assistant the result and it builds the post from that.
+- `pregame_feed.jpg`: competition, date, face-off time, rink and both team logos.
+- An English caption that tells fans when and where to come, with the team sign-off and hashtags.
+
+**Post-game post**, after the final horn:
+
+- **Slide 1** (`result_feed.jpg`): FINAL, both team logos, the score, period scores, shots and Näädät's goal scorers.
+- **Slide 2** (`summary_feed.jpg`): every goal with time and assists, shots and goalie saves. Made when the goal log is known.
+- An English caption with the team sign-off and hashtags, ready to copy.
+
+A story version (1080x1920) is made only when you ask for a story.
+
+III-divisioona games are read from the official results service, tulospalvelu.leijonat.fi. FCAA games are not on that service, so you tell the assistant the details and it builds the post from that.
 
 ## Examples
 
-| Slide 1 | Slide 2 | Story |
+| Pre-game | Post-game slide 1 | Post-game slide 2 |
 |---|---|---|
-| ![Slide 1: result card](docs/example_result.jpg) | ![Slide 2: goal summary](docs/example_summary.jpg) | ![Story](docs/example_story.jpg) |
+| ![Pre-game post](docs/example_pregame.jpg) | ![Slide 1: result card](docs/example_result.jpg) | ![Slide 2: goal summary](docs/example_summary.jpg) |
 
 ## Install
 
@@ -30,31 +38,37 @@ Step-by-step instructions for each app, including the network settings and the P
 
 Start a new chat and ask in your own words, for example:
 
+- "Make the game day post for tonight's Näädät game."
+- "Pre-game post for the FCAA game on Thursday: Näädät vs Harbour Hawks, 21:00 at Kaarela 1. Logo attached."
 - "Make the result post for last night's Näädät game."
 - "Result post for the game on 18 October."
-- "Make the post for the KHK game, and use this photo." (attach a real photo from the game)
+- "Make the result post for the KHK game, and use this photo." (attach a real photo from the game)
 - "We played FCAA tonight: Näädät 5, Harbour Hawks 2, at home. Goals: Esimerkki 2, Malli 2, Kuvitteellinen 1. Logo attached."
 
-The assistant first reads the game back to you (date, teams, score) and waits for your OK, so you can catch a wrong game. It then gives you the images in slide order and the caption. You post them yourself in the Instagram app; the assistant never posts anything.
+The assistant first reads the game back to you (date, teams, and the time and rink or the score) and waits for your OK, so you can catch a wrong game. It then gives you the images and the caption. You post them yourself in the Instagram app; the assistant never posts anything.
 
-If the assistant cannot reach the results service, it asks you for the game link from tulospalvelu.leijonat.fi, and if needed for the game report: open the address it gives you in a browser, save the page as a file and attach that file in the chat. On a phone, saving and attaching works better than copying and pasting the text.
+A result post needs a final result: if the game is still being played or the official result is not in yet, the assistant tells you so and waits.
+
+If the assistant cannot reach the results service, it asks you for the game link from tulospalvelu.leijonat.fi, and if needed for the game report: open the address it gives you in a browser and send the page in the chat. On iPhone: long-press the link, choose Download Linked File, then attach the file from the Files app; or open the page, select all the text, copy it and paste it in the chat.
 
 ### FCAA and other games not on the results service
 
-Tell the assistant the final score, the opponent, the date, whether Näädät played at home or away, whether it went to overtime or a shootout, and the scorers if you know them. Attach the opponent's logo if you have it; without one, the graphic shows a lettered badge. Last names and goal counts are enough, and so is a partial scorer list: the graphic marks it as partial, and the assistant leaves out anything you did not give it rather than guessing first names or assists.
+For a **pre-game post**, tell the assistant the opponent, the date, the face-off time and the rink. For a **result post**, tell it the final score, the opponent, the date, whether it went to overtime or a shootout, and the scorers if you know them. Last names and goal counts are enough, and so is a partial scorer list: the graphic marks it as partial, and the assistant leaves out anything you did not give it rather than guessing first names or assists.
 
-To save telling it home or away every time, list Näädät's home rinks under `home_arenas` in `team.json` (see below).
+Attach the opponent's logo if you have it; without one, the graphic shows a lettered badge. Games at Kaarela count as home games automatically; for any other rink, say whether Näädät played at home or away.
 
 ## Changing logos, colours and hashtags
+
+Ask whoever maintains the skill: on claude.ai the installed skill cannot be edited, so every change goes into a new zip that everyone uploads again. For maintainers:
 
 All team settings live in [`skills/naadat-result-post/assets/brand/team.json`](skills/naadat-result-post/assets/brand/team.json): team name, colours, the caption sign-off, hashtags, home rinks and the results-service ids. Each setting is explained in the file's `_help` block.
 
 - **Team logo**: put a square PNG (1000 px or more) in `assets/brand/` and set its file name in `logo`.
-- **Opponent logo**: simplest is to attach the logo in the chat when you ask for the post. To keep it for later games, put a PNG in `assets/logos/` named by the club's association id: the number in the link of the club's logo on tulospalvelu.leijonat.fi (for example `10115736.png`).
+- **Opponent logo**: for a single post, the user simply attaches the logo in the chat. To keep it for later games, put a PNG in `assets/logos/` named by the club's association id: the number in the link of the club's logo on tulospalvelu.leijonat.fi (for example `10115736.png`).
 - **Colours**: edit the hex codes under `colors`.
-- **Home rinks**: list them under `home_arenas`, for example `["Kaarela"]`.
+- **Home rinks**: `home_arenas` ships as `["Kaarela"]`; a rink counts as home when its name starts with an entry (so Kaarela 1 and Kaarela 2 both match).
 
-Changes reach your assistant through a new zip. Maintainers only: rebuild it with `python tools/build_zip.py` and commit `dist/naadat-result-post.zip`; everyone then downloads the new zip from the link above and uploads it again. Claude Code and Codex read the copied skill folder directly, so there a change to that folder applies at once.
+Then rebuild the zip with `python tools/build_zip.py`, commit `dist/naadat-result-post.zip`, and ask everyone to download the new zip from the link above and upload it again. Claude Code and Codex read the copied skill folder directly, so there a change to that folder applies at once.
 
 ## No AI label
 

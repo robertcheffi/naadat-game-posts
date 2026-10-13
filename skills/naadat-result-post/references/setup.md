@@ -1,6 +1,6 @@
 # Setup per app
 
-The skill is one folder (`naadat-result-post/`) with `SKILL.md` at its root. It needs Python 3.8+ with Pillow 8.2 or newer, and for automatic fetching, internet access to `tulospalvelu.leijonat.fi`. Without that access it still works: the assistant asks you for the game report (SKILL.md step 1, "Blocked network"). FCAA games are always entered by hand and need no network.
+The skill is one folder (`naadat-result-post/`) with `SKILL.md` at its root. It needs Python 3.8+ with Pillow 8.2 or newer, and for automatic fetching, internet access to `tulospalvelu.leijonat.fi`. Without that access it still works: the assistant asks you for the game report (SKILL.md, "Blocked network"). FCAA games are always entered by hand and need no network.
 
 The commands below use `python`. On macOS and Linux, use `python3` where `python` is not found.
 
@@ -11,7 +11,7 @@ The commands below use `python`. On macOS and Linux, use `python3` where `python
    - Individual plans (Pro, Max): on the same page, turn on **Allow network egress**.
    - Team and Enterprise: an owner opens Organization settings > Capabilities and picks **Allow network egress to package managers and specific domains**, then adds `tulospalvelu.leijonat.fi`, or picks **All domains**.
 3. Customize > Skills > **+** > **Create skill** > **Upload a skill**, choose `naadat-result-post.zip` (from the repo's `dist/` folder) and switch it on. On Team and Enterprise plans an owner first enables Skills under Organization settings > Plugins & skills (Policy tab).
-4. In a new chat: "Make the result post for last night's Näädät game."
+4. In a new chat: "Make the result post for last night's Näädät game." or "Make the game day post for tonight."
 
 ## Claude Code
 
@@ -43,7 +43,7 @@ network_access = true
 
 ## Any other assistant (ChatGPT, Gemini, ...)
 
-Upload the zip and say: "Unzip this, read naadat-result-post/SKILL.md and follow it for last night's game." Sandboxes without internet use the "Blocked network" path in SKILL.md step 1.
+Upload the zip and say: "Unzip this, read naadat-result-post/SKILL.md and follow it for last night's game." Sandboxes without internet use the "Blocked network" path in SKILL.md.
 
 ## Installing Pillow
 
@@ -56,7 +56,7 @@ python3 -m venv ~/.venvs/naadat && ~/.venvs/naadat/bin/pip install pillow   # th
 
 The distro package (`apt install python3-pil`) is too old on Debian 11 (Pillow 8.1); check with `python -c "import PIL; print(PIL.__version__)"`.
 
-## Checking an install
+## Checking an install (for maintainers)
 
 Run from any folder; `SKILL_DIR` is the installed `naadat-result-post` folder. The output goes to a temporary folder, never into the skill folder (on claude.ai the skill folder is read-only).
 
@@ -69,4 +69,4 @@ python SKILL_DIR/scripts/clean_image.py check "$OUT"/*.jpg
 
 All three should finish without errors (`--list` needs network), and every `check` line should say `CLEAN`.
 
-On Windows (PowerShell or cmd), make any empty folder instead of using `mktemp`, for example `C:\temp\naadat-check`, and run the same three commands with that folder as the output: `--out C:\temp\naadat-check` for the render, then `check` with the three file names in it (`C:\temp\naadat-check\result_feed.jpg` and so on).
+On Windows (PowerShell or cmd), make any empty folder instead of using `mktemp`, for example `C:\temp\naadat-check`, and run the same three commands with that folder as the output: `--out C:\temp\naadat-check` for the render, then `check` with the file names in it (`C:\temp\naadat-check\result_feed.jpg` and so on).

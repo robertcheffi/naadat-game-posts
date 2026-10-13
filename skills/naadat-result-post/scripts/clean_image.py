@@ -16,10 +16,12 @@ declares are findings) and also searches all bytes for provenance strings in
 ASCII, UTF-16 and UTF-32. Any finding means METADATA.
 
 `ai_provenance(path)` lists what in a SOURCE file declares AI involvement: an
-IPTC/XMP DigitalSourceType of trainedAlgorithmicMedia,
-compositeWithTrainedAlgorithmicMedia, algorithmicMedia or compositeSynthetic
-(any text encoding), any C2PA/JUMBF manifest, or EXIF Software / XMP
-CreatorTool / PNG Software naming a generative tool. `clean` refuses such a
+IPTC/XMP DigitalSourceType that is not a known non-AI code (digitalCapture,
+negativeFilm, minorHumanEdits, ...; read after removing CDATA markers and XML
+comments and resolving entities, in any text encoding; fails closed on a value
+it cannot read), any C2PA/JUMBF manifest or remote manifest reference (XMP
+dcterms:provenance URL), or EXIF Software / XMP CreatorTool / PNG Software
+naming a generative tool. `clean` refuses such a
 file with exit code 4: it re-encodes camera photos, it does not launder
 AI-made or AI-edited images. `clean` also cannot remove pixel watermarks
 (SynthID and similar survive re-encoding), so a "no findings" result proves
@@ -37,7 +39,6 @@ import re
 import struct
 import sys
 import zlib
-from urllib.parse import unquote
 
 from PIL import Image, ImageOps
 
@@ -176,18 +177,25 @@ def clean_file(src: str, dst: str) -> str:
 def ai_provenance(path: str) -> list:
     """Reasons why the SOURCE file declares AI involvement; empty if none.
 
-    Reads bytes only (no pixel decode): DigitalSourceType values and AI
-    disclosure phrases in any text encoding (also XML-escaped, in compressed
-    PNG text chunks and in split JPEG extended XMP), C2PA/JUMBF manifests in
-    any container, and software fields (EXIF Software/ProcessingSoftware,
-    XMP CreatorTool/softwareAgent, PNG Software/Source) naming a generative tool.
+    Reads bytes only (no pixel decode). Finds DigitalSourceType values and AI
+    disclosure phrases in any text encoding, C2PA/JUMBF manifests in any
+    container, remote C2PA manifest references (XMP dcterms:provenance with a
+    URL), and software fields (EXIF Software/ProcessingSoftware, XMP
+    CreatorTool/softwareAgent, PNG Software/Source) naming a generative tool.
+    XMP text is normalised before the property scan (CDATA markers and XML
+    comments removed, every character entity resolved), and the scan fails
+    closed: a DigitalSourceType whose value is not a known non-AI IPTC code
+    (digitalCapture, negativeFilm, minorHumanEdits, ...) is a reason too.
+    Compressed PNG text chunks and split JPEG extended XMP are scanned after
+    reassembly.
     """
     with open(path, "rb") as f:
         data = f.read()
     reasons: list = []
-    blobs = [data] + _png_text_blobs(data) + _xmp_extension_blobs(data)
-    for blob in blobs:
-        _scan_text(blob, reasons)
+    _scan_text(data, reasons, "")
+    extra = _png_text_blobs(data) + [("extended XMP", b) for b in _xmp_extension_blobs(data)]
+    for label, blob in extra:
+        _scan_text(blob, reasons, label)
     _scan_c2pa(data, reasons)
     for value in _exif_software(data) + _png_software(data):
         _tool_reason(value, "software field", reasons)
@@ -209,17 +217,139 @@ def _find_all(hay: bytes, needle: bytes, limit: int = 256):
         i = hay.find(needle, i + 1)
 
 
-def _window(blob: bytes, start: int, enc: str, chars: int) -> str:
-    width = {"ascii": 1, "utf-16-le": 2, "utf-16-be": 2}.get(enc, 4)
-    raw = blob[start:start + chars * width]
-    codec = "latin-1" if enc == "ascii" else enc
-    text = raw.decode(codec, errors="replace")
-    if enc == "ascii":  # XMP is UTF-8; decode it as such where possible
-        text = raw.decode("utf-8", errors="replace")
-    return html.unescape(text)
+def _find_all_str(hay: str, needle: str):
+    i = hay.find(needle)
+    while i >= 0:
+        yield i
+        i = hay.find(needle, i + 1)
 
 
-def _scan_text(blob: bytes, reasons: list) -> None:
+# Non-AI codes of the IPTC DigitalSourceType vocabulary
+# (cv.iptc.org/newscodes/digitalsourcetype). Anything else, including
+# algorithmicallyEnhanced and dataDrivenMedia, an empty or unreadable value,
+# or two values in one property, counts as an AI declaration (fail closed).
+NON_AI_SOURCE_TYPES = frozenset((
+    "digitalcapture", "computationalcapture", "negativefilm", "positivefilm", "print",
+    "humanedits", "minorhumanedits", "compositecapture", "composite", "digitalcreation",
+    "digitalart", "virtualrecording", "screencapture"))
+_IPTC_DST_BASES = ("http://cv.iptc.org/newscodes/digitalsourcetype/",
+                   "https://cv.iptc.org/newscodes/digitalsourcetype/")
+# A blob is also decoded as UTF-16/UTF-32 text where one of these occurs in
+# that encoding (XMP may be written in either).
+_WIDE_TRIGGERS = (b"digitalsourcetype", b"provenance", b"xmpmeta", b"rdf:", b"creatortool",
+                  b"softwareagent")
+_ASCII_LOWER = {c: c + 32 for c in range(65, 91)}  # lowercase that keeps every offset
+_CDATA_MARKS = re.compile(r"<!\[CDATA\[|\]\]>")
+_XML_COMMENT = re.compile(r"<!--.*?-->", re.DOTALL)
+_TAG = re.compile(r"<[^<>]*>")
+_ATTR_VALUE = re.compile(r"""["']?\s*[:=]\s*(["'])(.*?)\1""", re.DOTALL)
+_START_TAG_REST = re.compile(r"""((?:\s(?:[^<>"']|"[^"]*"|'[^']*')*)?)(/?)>""", re.DOTALL)
+_RDF_RESOURCE = re.compile(r"""rdf:resource\s*=\s*(["'])(.*?)\1""", re.DOTALL)
+_OPEN_BEFORE = re.compile(r"<(/?)([\w.\-]*:)?$")
+_NAME_CHAR = re.compile(r"[\w.\-]")
+
+
+def _decoded_texts(blob: bytes):
+    """(encoding, text) views of a blob: latin-1 always, UTF-16/32 where XMP-like text occurs."""
+    yield "ascii", blob.decode("latin-1")
+    lower = blob.lower()
+    for enc in _WIDE:
+        width = 2 if enc.startswith("utf-16") else 4
+        aligns = set()
+        for trig in _WIDE_TRIGGERS:
+            needle = trig.decode("ascii").encode(enc)
+            for pos in _find_all(lower, needle, 64):
+                aligns.add(pos % width)
+        for a in sorted(aligns):
+            raw = blob[a:]
+            raw = raw[:len(raw) - len(raw) % width]
+            yield enc, raw.decode(enc, errors="replace")
+
+
+def _normalised(text: str):
+    """XMP text as an XML reader sees it, ASCII-lowercased.
+
+    CDATA markers go (their content stays) and every character entity is
+    resolved, over the whole text, not a window. Two views: with XML comments
+    kept and with them removed, so a comment opened outside a packet cannot
+    hide the packet.
+    """
+    base = _CDATA_MARKS.sub("", text)
+    yield html.unescape(base).translate(_ASCII_LOWER)
+    if "<!--" in base:
+        yield html.unescape(_XML_COMMENT.sub("", base)).translate(_ASCII_LOWER)
+
+
+def _property_values(low: str, name: str, limit: int = 256):
+    """Values of every XML element or attribute (or JSON key) whose local name is `name`.
+
+    Yields (value or None, form); None means the value cannot be read.
+    Closing tags are skipped.
+    """
+    for n, pos in enumerate(_find_all_str(low, name)):
+        if n >= limit:
+            yield None, "too many occurrences"
+            return
+        end = pos + len(name)
+        if _NAME_CHAR.match(low, end):
+            continue  # a longer name, e.g. digitalsourcetypes
+        if pos and _NAME_CHAR.match(low, pos - 1):
+            continue  # a longer name ending in `name`; a namespace prefix ends in ':'
+        if pos and low[pos - 1] == "/" and low[pos - 2:pos] != "</":
+            continue  # a URL path segment (the IPTC code URIs), read via its property
+        tag = _OPEN_BEFORE.search(low, max(0, pos - 80), pos)
+        if tag and tag.group(1):
+            continue  # closing tag
+        if tag:  # element
+            m = _START_TAG_REST.match(low, end)
+            if not m:
+                yield None, "element"
+                continue
+            res = _RDF_RESOURCE.search(m.group(1) or "")
+            if res:
+                yield res.group(2), "rdf:resource"
+                continue
+            if m.group(2):
+                yield None, "empty element"
+                continue
+            qname = low[tag.start() + 1:end]
+            close = re.compile(r"</" + re.escape(qname) + r"\s*>").search(low, m.end())
+            if not close:
+                yield None, "unterminated element"
+                continue
+            yield _TAG.sub("", low[m.end():close.start()]), "element"
+            continue
+        m = _ATTR_VALUE.match(low, end)
+        yield (m.group(2), "attribute") if m else (None, "unreadable")
+
+
+def _source_type_reason(value, form: str, tag: str):
+    """None when value is a known non-AI IPTC code, else the reason to refuse."""
+    if value is None:
+        return f"DigitalSourceType value cannot be read ({form}{tag})"
+    v = value.strip()
+    code = v
+    for base in _IPTC_DST_BASES:
+        if v.startswith(base):
+            code = v[len(base):]
+            break
+    if code in NON_AI_SOURCE_TYPES:
+        return None
+    for token in AI_SOURCE_TYPES:
+        if token in v:
+            return f"DigitalSourceType {token} ({form}{tag})"
+    return f"DigitalSourceType value is not a known non-AI code: {v[:80]!r} ({form}{tag})"
+
+
+def _scan_text(blob: bytes, reasons: list, label: str = "") -> None:
+    """Token search in every encoding, then a normalised XMP property scan.
+
+    label names where a non-raw blob came from (e.g. "iTXt" for a decompressed
+    PNG chunk); it stands in for "ascii" in the reasons.
+    """
+    def where(enc: str) -> str:
+        return label if label and enc == "ascii" else enc
+
     lower = blob.lower()
     matched: list = []
     for token in AI_SOURCE_TYPES:  # longest first; skip the shorter ones it contains
@@ -227,28 +357,35 @@ def _scan_text(blob: bytes, reasons: list) -> None:
             continue
         for enc, needle in _encodings(token.encode("ascii")):
             if needle in lower:
-                reasons.append(f"DigitalSourceType {token} ({enc})")
+                reasons.append(f"DigitalSourceType {token} ({where(enc)})")
                 matched.append(token)
     for phrase in AI_PHRASES:
         for enc, needle in _encodings(phrase.encode("ascii")):
             if needle in lower:
-                reasons.append(f"AI disclosure text '{phrase}' ({enc})")
-    # Escaped or percent-encoded values: read the text after each property name.
-    for enc, needle in _encodings(b"digitalsourcetype"):
-        for pos in _find_all(lower, needle):
-            text = unquote(_window(blob, pos, enc, 400)).lower()
-            for token in AI_SOURCE_TYPES:
-                if token in text and not any(token in longer for longer in matched):
-                    reasons.append(f"DigitalSourceType {token} ({enc})")
-                    break
-    for key in _XMP_TOOL_KEYS:
-        for enc, needle in _encodings(key.encode("ascii")):
-            for pos in _find_all(lower, needle):
-                text = _window(blob, pos + len(needle), enc, 400)
-                m = _XMP_VALUE.match(text)
-                if m:
-                    value = m.group(2) if m.group(2) is not None else m.group(3)
-                    _tool_reason(value, f"XMP {key.strip(':')}", reasons)
+                reasons.append(f"AI disclosure text '{phrase}' ({where(enc)})")
+    for enc, text in _decoded_texts(blob):
+        tag = ", " + where(enc)
+        for low in _normalised(text):
+            for phrase in AI_PHRASES:
+                if phrase in low:
+                    reasons.append(f"AI disclosure text '{phrase}' (normalised{tag})")
+            for value, form in _property_values(low, "digitalsourcetype"):
+                reason = _source_type_reason(value, form, tag)
+                if reason:
+                    reasons.append(reason)
+            for value, form in _property_values(low, "provenance"):
+                v = (value or "").strip()
+                if value is None or "://" in v or "c2pa" in v or v.startswith("urn:"):
+                    reasons.append(f"C2PA remote manifest reference (XMP provenance {form} "
+                                   f"{v[:80]!r}{tag})")
+            for key in _XMP_TOOL_KEYS:
+                for n, pos in enumerate(_find_all_str(low, key)):
+                    if n >= 256:
+                        break
+                    m = _XMP_VALUE.match(low, pos + len(key))
+                    if m:
+                        value = m.group(2) if m.group(2) is not None else m.group(3)
+                        _tool_reason(value, f"XMP {key.strip(':')}", reasons)
 
 
 def _tool_reason(value, where: str, reasons: list) -> None:
@@ -307,7 +444,10 @@ def _inflate(payload: bytes) -> bytes:
 
 
 def _png_text_entries(data: bytes):
-    """(keyword, text bytes) for every tEXt/zTXt/iTXt chunk, decompressed."""
+    """(keyword, text bytes, label) for every tEXt/zTXt/iTXt chunk, decompressed.
+
+    label is "zTXt" or "iTXt" for a compressed chunk, "" for plain text.
+    """
     if data[:8] != PNG_SIGNATURE:
         return
     for ctype, p in _png_chunks(data):
@@ -315,22 +455,23 @@ def _png_text_entries(data: bytes):
             continue
         key, _, rest = p.partition(b"\x00")
         if ctype == b"tEXt":
-            yield key, rest
+            yield key, rest, ""
         elif ctype == b"zTXt":
-            yield key, _inflate(rest[1:])
+            yield key, _inflate(rest[1:]), "zTXt"
         else:
-            flag = rest[:1]
+            compressed = rest[:1] == b"\x01"
             parts = rest[2:].split(b"\x00", 2)
             text = parts[2] if len(parts) == 3 else b""
-            yield key, (_inflate(text) if flag == b"\x01" else text)
+            yield key, (_inflate(text) if compressed else text), ("iTXt" if compressed else "")
 
 
 def _png_text_blobs(data: bytes) -> list:
-    return [text for _, text in _png_text_entries(data) if text]
+    """(label, text) of compressed PNG text chunks; plain ones are in the raw-byte scan."""
+    return [(label, text) for _, text, label in _png_text_entries(data) if text and label]
 
 
 def _png_software(data: bytes) -> list:
-    return [text for key, text in _png_text_entries(data)
+    return [text for key, text, _ in _png_text_entries(data)
             if key.strip().lower() in (b"software", b"source", b"creator tool", b"creatortool")]
 
 

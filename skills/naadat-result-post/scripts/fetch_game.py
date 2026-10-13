@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Fetch a finished Näädät game from the Finnish Ice Hockey Association results
-service (tulospalvelu.leijonat.fi) and write it as a normalized game.json.
+"""Fetch a Näädät game from the Finnish Ice Hockey Association results service
+(tulospalvelu.leijonat.fi): a finished game as game.json (post-game), or an
+upcoming one as pregame.json (pre-game: kick-off, both teams, logos, rink).
 
 Standard library only, so it runs in any sandbox that has Python 3.8+.
 Only III-divisioona games are on the results service. FCAA and other games are
-entered by hand from references/manual_game_template.json; check that file with
---validate.
+entered by hand from references/manual_game_template.json (post-game) or
+references/manual_pregame_template.json (pre-game); check the file with --validate.
 
 Examples:
   python fetch_game.py                      # latest finished game -> game.json
@@ -13,20 +14,26 @@ Examples:
   python fetch_game.py --game-id 2720857    # a specific game (season found automatically)
   python fetch_game.py --date 2026-10-04    # the game played on that date
   python fetch_game.py --game-url "https://tulospalvelu.leijonat.fi/game?season=2027&gameid=2720857"
-  python fetch_game.py --validate game.json # check a hand-written game.json
+  python fetch_game.py --next               # next game not started yet -> pregame.json
+  python fetch_game.py --pregame --game-id 2720880   # pre-game data of a scheduled game
+  python fetch_game.py --pregame --date 2026-10-18
+  python fetch_game.py --validate game.json # check a hand-written game.json or pregame.json
 
 The summary line reads Näädät first, for example
   Wrote game.json: 10.10.2026 Näädät 4-28 KHK (L, away), 32 goals in the log.
+  Wrote pregame.json: SUN 18.10.2026 21:10 Näädät vs HC Ludwig (home) at Kaarela 1
 
 Exit codes:
-  0  game.json written, or --validate found nothing to fix
-  1  error (no such game, unreadable input, no network; the message says what to do)
+  0  file written, or --validate found nothing to fix (it may still print a
+     note, e.g. a partial scorer list, or a WARNING about a missing logo_file
+     alone: pass both on to the user)
+  1  error (no such game, a pre-game for a game already played, unreadable input,
+     no network; the message says what to do)
   2  the game has started but is not final yet (also without --game-id: a newer
      game than the last final one has been played). Wait for the official result,
      or pass --allow-unfinished to use it anyway
-  3  --validate printed a WARNING other than a missing logo_file. Fix game.json
+  3  --validate printed a WARNING other than a missing logo_file. Fix the file
      or ask the user, then run --validate again. Do not render before it exits 0
-     (a missing logo_file alone still exits 0)
 
 If this sandbox cannot reach the internet, a game id is needed (the user can
 copy the game link from tulospalvelu.leijonat.fi). Get the raw JSON text of the
@@ -81,6 +88,20 @@ PLACEHOLDER_TEAM_NAMES = {"opponent"}
 PLACEHOLDER_PERSON_WORDS = {"esimerkki", "malli", "kuvitteellinen"}
 PLACEHOLDER_FULL_NAMES = {"first last"}
 TEMPLATE_DATE_FALLBACK = "2026-10-15"
+# Example values earlier template versions shipped with; a manual game.json that
+# still has them was most likely not filled in (--validate warns).
+LEGACY_TEMPLATE_ARENA = "Helsingin jäähalli"
+LEGACY_TEMPLATE_TIME = "21:00"
+LEGACY_TEMPLATE_PERIODS = (("1", 1, 0), ("2", 2, 1), ("3", 1, 1))
+GAME_SCHEMA = "naadat-result-post/game@1"
+PREGAME_SCHEMA = "naadat-result-post/pregame@1"
+PREGAME_TEMPLATE_PATH = os.path.join(SKILL_DIR, "references", "manual_pregame_template.json")
+WEEKDAYS = ("MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN")
+
+
+def weekday_code(day: dt.date) -> str:
+    """English three-letter weekday in capitals, e.g. 'SUN'."""
+    return WEEKDAYS[day.weekday()]
 
 
 class NetError(Exception):
@@ -352,6 +373,23 @@ def result_code(us_goals, them_goals, finish: str, final: bool) -> str:
     return ("W" if won else "L") if finish == "REG" else finish + ("W" if won else "L")
 
 
+def partly_missing_saves(summary: dict, saves_rows: list) -> bool:
+    """True when a played regulation period (1-3) shows saves '0-0' although goals
+    were scored in it. The report lists one row per period and the total last."""
+    goal_rows = [r for r in summary.get("PeriodGoals") or [] if isinstance(r, dict)]
+    try:
+        played = int(summary.get("PlayedPeriods") or 0)
+    except (TypeError, ValueError):
+        played = 0
+    played = played or max(len(goal_rows) - 1, 0)
+    for i in range(min(played, 3, len(goal_rows) - 1, len(saves_rows) - 1)):
+        goals = split_pair(goal_rows[i].get("Goals"))
+        saves = split_pair(saves_rows[i].get("Saves"))
+        if saves == (0, 0) and goals and goals != (0, 0):
+            return True
+    return False
+
+
 def normalize(g: dict, report: dict, cfg: dict, season: int) -> dict:
     lt = cfg["leijonat"]
     us_home = g["HomeAssociationID"] == lt["association_id"]
@@ -455,7 +493,11 @@ def normalize(g: dict, report: dict, cfg: dict, season: int) -> dict:
     saves_rows = [s for s in summary.get("PeriodSaves") or [] if isinstance(s, dict)]
     saves_total = split_pair(saves_rows[-1].get("Saves")) if saves_rows else None
     # A game that is not final, or whose saves were never entered ('0-0'), has no
-    # shot count: shots on goal would be just the score.
+    # shot count: shots on goal would be just the score. The same holds when only
+    # some periods were entered: a played regulation period with saves '0-0' but
+    # goals in it means its saves are missing, so the total is too low.
+    if saves_total and saves_total != (0, 0) and partly_missing_saves(summary, saves_rows):
+        saves_total = None
     if final and saves_total and saves_total != (0, 0):
         home_saves, away_saves = saves_total
         # The shootout winner's extra goal is in the score but was not a shot on goal
@@ -468,7 +510,7 @@ def normalize(g: dict, report: dict, cfg: dict, season: int) -> dict:
 
     when = game_datetime(g)
     return {
-        "schema": "naadat-result-post/game@1",
+        "schema": GAME_SCHEMA,
         "source": "leijonat",
         "game_id": g["GameID"],
         "season": season,
@@ -612,7 +654,30 @@ def summary_line(data: dict, verb: str, path: str, us_side: str = None) -> str:
     else:
         teams = (f"home {home.get('name')} {home.get('goals')}-{away.get('goals')} away {away.get('name')} "
                  f"({result}, Näädät side unknown)")
-    return f"{verb} {path}: {fi_date(data.get('date'))} {teams}, {logged_goals(data)} goals in the log."
+    venue = ""
+    if data.get("source") == "manual":
+        # Hand-entered files: show the arena, so the user confirms it too.
+        venue = f" at {data.get('arena')}" if str(data.get("arena") or "").strip() else " (no arena)"
+    return f"{verb} {path}: {fi_date(data.get('date'))} {teams}{venue}, {logged_goals(data)} goals in the log."
+
+
+def pregame_line(data: dict, verb: str, path: str, us_side: str = None) -> str:
+    """'Wrote pregame.json: SUN 18.10.2026 21:10 Näädät vs HC Ludwig (home) at Kaarela 1'"""
+    home = data.get("home") if isinstance(data.get("home"), dict) else {}
+    away = data.get("away") if isinstance(data.get("away"), dict) else {}
+    side = us_side or data.get("us_side")
+    try:
+        weekday = weekday_code(dt.datetime.strptime(str(data.get("date")), "%Y-%m-%d").date()) + " "
+    except ValueError:
+        weekday = ""
+    when = f"{weekday}{fi_date(data.get('date'))} {data.get('time') or '(no time)'}"
+    if side in ("home", "away"):
+        us, them = (home, away) if side == "home" else (away, home)
+        teams = f"{us.get('name')} vs {them.get('name')} ({side})"
+    else:
+        teams = f"home {home.get('name')} vs away {away.get('name')} (Näädät side unknown)"
+    arena = str(data.get("arena") or "").strip()
+    return f"{verb} {path}: {when} {teams} {'at ' + arena if arena else '(no arena)'}"
 
 
 def goal_log_warning(data: dict):
@@ -657,6 +722,44 @@ def template_date() -> str:
         return TEMPLATE_DATE_FALLBACK
 
 
+def template_values() -> dict:
+    """Example values of the manual game template that must not reach a post: the
+    ones it ships with now, plus the ones earlier versions shipped with."""
+    out = {"arena": {LEGACY_TEMPLATE_ARENA}, "time": {LEGACY_TEMPLATE_TIME}, "periods": [LEGACY_TEMPLATE_PERIODS]}
+    try:
+        with open(TEMPLATE_PATH, encoding="utf-8-sig") as f:
+            tpl = json.load(f)
+    except Exception:
+        return out
+    if isinstance(tpl, dict):
+        if str(tpl.get("arena") or "").strip():
+            out["arena"].add(str(tpl["arena"]).strip())
+        if str(tpl.get("time") or "").strip():
+            out["time"].add(str(tpl["time"]).strip())
+        rows = period_key(tpl.get("periods"))
+        if rows:
+            out["periods"].append(rows)
+    return out
+
+
+def pregame_template_date() -> str:
+    try:
+        with open(PREGAME_TEMPLATE_PATH, encoding="utf-8-sig") as f:
+            return str(json.load(f).get("date") or "")
+    except Exception:
+        return ""
+
+
+def period_key(periods):
+    """A periods list as a comparable tuple, or None when it is not one."""
+    if not isinstance(periods, list) or not periods:
+        return None
+    try:
+        return tuple((str(p["label"]), int(p["home"]), int(p["away"])) for p in periods)
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
 def name_texts(obj) -> list:
     """Every string in a name object (or a bare string)."""
     if isinstance(obj, str):
@@ -670,6 +773,10 @@ def name_label(obj) -> str:
     return next((t for t in name_texts(obj) if t.strip()), "?")
 
 
+def is_empty_name(obj) -> bool:
+    return not any(t.strip() for t in name_texts(obj))
+
+
 def is_placeholder_name(obj) -> bool:
     for text in name_texts(obj):
         low = text.strip().lower()
@@ -680,15 +787,88 @@ def is_placeholder_name(obj) -> bool:
     return False
 
 
+def is_count(value) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+def fold(text) -> str:
+    return " ".join(str(text or "").split()).casefold()
+
+
+def report_errors(path: str, errors: list) -> int:
+    for e in errors:
+        print(f"ERROR: {e}", file=sys.stderr)
+    print(f"{path} cannot be used.", file=sys.stderr)
+    return EXIT_ERROR
+
+
+def team_checks(data: dict, cfg: dict, warnings: list) -> str:
+    """Checks shared by game and pregame files: us_side, the is_us flags, team
+    names. Returns the Näädät side, or None when it cannot be told."""
+    us_side = data.get("us_side")
+    if us_side not in ("home", "away"):
+        flagged = [k for k in ("home", "away") if data[k].get("is_us") is True]
+        warnings.append(f"us_side is {us_side!r}; set it to 'home' or 'away' (it decides the logo order)")
+        us_side = flagged[0] if len(flagged) == 1 else None
+    elif data[us_side].get("is_us") is not True or data["away" if us_side == "home" else "home"].get("is_us"):
+        warnings.append(f"us_side is '{us_side}' but the is_us flags on home/away do not agree")
+    display = cfg.get("display_name") or "Näädät"
+    for key in ("home", "away"):
+        name = str(data[key].get("name") or "").strip()
+        if name.lower() in PLACEHOLDER_TEAM_NAMES:
+            warnings.append(f"{key}.name is the template placeholder {name!r}; use the opponent's real name")
+    if us_side:
+        them_side = "away" if us_side == "home" else "home"
+        if fold(data[us_side].get("name")) != fold(display):
+            warnings.append(f"{us_side} is Näädät (us_side, is_us) but its name is {data[us_side].get('name')!r}; "
+                            f"name it {display!r}. If Näädät really is the {them_side} team, swap the two "
+                            "blocks and set us_side")
+        if fold(data[them_side].get("name")) == fold(display):
+            warnings.append(f"the opponent ({them_side}) is named {display!r}; use the opponent's name")
+    return us_side
+
+
+def logo_checks(data: dict, path: str) -> list:
+    out = []
+    base = os.path.dirname(os.path.abspath(path))
+    for key in ("home", "away"):
+        logo = data[key].get("logo_file")
+        if logo:
+            resolved = logo if os.path.isabs(str(logo)) else os.path.join(base, str(logo))
+            if not os.path.isfile(resolved):
+                out.append(f"{key}.logo_file {logo!r} not found (looked in {resolved}); "
+                           "the graphic will show a lettered badge")
+    return out
+
+
+def finish_validate(line: str, warnings: list, notes: list, logo_warnings: list, what: str) -> int:
+    print(line)
+    for w in warnings + logo_warnings:
+        print(f"WARNING: {w}")
+    for n in notes:
+        print(f"note: {n}")
+    if warnings:
+        print(f"Fix {what} or ask the user, then run --validate again (exit {EXIT_WARNINGS}).")
+        return EXIT_WARNINGS
+    if logo_warnings:
+        print("Only the missing logo is left, which keeps exit 0: ask the user for the logo, or remove logo_file.")
+    elif not notes:
+        print("No problems found.")
+    return 0
+
+
 def validate(path: str) -> int:
-    """Check a game.json (usually hand-written). Exit 0 when clean (a missing logo
-    file alone is fine), 3 on any other warning, 1 when unusable."""
+    """Check a game.json or pregame.json (usually hand-written); the schema field
+    tells them apart. Exit 0 when clean (a missing logo file alone is fine, and a
+    note never changes the exit code), 3 on any other warning, 1 when unusable."""
     try:
         with open(path, encoding="utf-8-sig") as f:
             data = json.load(f)
     except (OSError, ValueError) as exc:
         print(f"ERROR: could not read {path} as JSON: {exc}", file=sys.stderr)
         return EXIT_ERROR
+    if isinstance(data, dict) and data.get("schema") == PREGAME_SCHEMA:
+        return validate_pregame(path, data)
     errors = []
     if not isinstance(data, dict):
         errors.append("the file is not a JSON object")
@@ -700,7 +880,7 @@ def validate(path: str) -> int:
                 continue
             if not str(team.get("name") or "").strip():
                 errors.append(f"'{key}.name' is empty")
-            if not isinstance(team.get("goals"), int) or isinstance(team.get("goals"), bool) or team["goals"] < 0:
+            if not is_count(team.get("goals")):
                 errors.append(f"'{key}.goals' must be a whole number, got {team.get('goals')!r}")
         for key in ("goals", "periods", "scorers_us", "scorers_them", "goalies"):
             value = data.get(key)
@@ -723,49 +903,72 @@ def validate(path: str) -> int:
             for i, row in enumerate(data.get(key) if isinstance(data.get(key), list) else []):
                 if isinstance(row, dict) and not isinstance(row.get("name"), dict):
                     errors.append(f"'{key}[{i}].name' must be a name object {{full, short, last, first}}")
+        for i, gk in enumerate(data.get("goalies") if isinstance(data.get("goalies"), list) else []):
+            if isinstance(gk, dict) and not isinstance(gk.get("name"), dict):
+                errors.append(f"'goalies[{i}].name' must be a name object {{full, short, last, first}}, "
+                              f"got {gk.get('name')!r}")
     if errors:
-        for e in errors:
-            print(f"ERROR: {e}", file=sys.stderr)
-        print(f"{path} cannot be used.", file=sys.stderr)
-        return EXIT_ERROR
+        return report_errors(path, errors)
 
-    warnings = []       # each makes the exit code 3
-    logo_warnings = []  # a missing logo file alone keeps exit 0
+    cfg = load_config()
+    warnings, notes = [], []   # a warning makes the exit code 3; a note never does
     home, away = data["home"], data["away"]
-    us_side = data.get("us_side")
-    if us_side not in ("home", "away"):
-        flagged = [k for k in ("home", "away") if data[k].get("is_us") is True]
-        warnings.append(f"us_side is {us_side!r}; set it to 'home' or 'away' (it decides the logo order)")
-        us_side = flagged[0] if len(flagged) == 1 else None
-    elif data[us_side].get("is_us") is not True or data["away" if us_side == "home" else "home"].get("is_us"):
-        warnings.append(f"us_side is '{us_side}' but the is_us flags on home/away do not agree")
+    us_side = team_checks(data, cfg, warnings)
 
     date = data.get("date")
     try:
         dt.datetime.strptime(str(date), "%Y-%m-%d")
     except ValueError:
         warnings.append(f"date {date!r} is not ISO YYYY-MM-DD")
-    if data.get("source") == "manual" and str(date) == template_date():
+    manual = data.get("source") == "manual"
+    if manual and str(date) == template_date():
         warnings.append(f"date {date} is the template's example date; set the real date of the game")
+    if manual:
+        confirmed = data.get("confirmed") if isinstance(data.get("confirmed"), list) else []
+        tpl = template_values()
+        hint = ("; set what the user said, or leave it empty if they did not say. If the user really said "
+                "this, add \"confirmed\": [\"{key}\"] to game.json")
+        arena = str(data.get("arena") or "").strip()
+        if arena and arena in tpl["arena"] and "arena" not in confirmed:
+            warnings.append(f"arena {arena!r} is the template's example value" + hint.format(key="arena"))
+        time_s = str(data.get("time") or "").strip()
+        if time_s and time_s in tpl["time"] and "time" not in confirmed:
+            warnings.append(f"time {time_s!r} is the template's example value" + hint.format(key="time"))
+        rows = period_key(data.get("periods"))
+        if rows and rows in tpl["periods"] and "periods" not in confirmed:
+            warnings.append("periods are the template's example rows; enter the period scores the user gave, "
+                            "or set periods to [] if unknown. If the user really gave exactly these, add "
+                            "\"confirmed\": [\"periods\"] to game.json")
 
-    for key in ("home", "away"):
-        if str(data[key].get("name") or "").strip().lower() in PLACEHOLDER_TEAM_NAMES:
-            warnings.append(f"{key}.name is the template placeholder {data[key]['name']!r}; "
-                            "use the opponent's real name")
-    placeholders = set()
+    placeholders, empties = set(), set()
     for key in ("scorers_us", "scorers_them"):
-        for row in data.get(key) or []:
+        for i, row in enumerate(data.get(key) or []):
             if is_placeholder_name(row.get("name")):
                 placeholders.add(f"{key}: {name_label(row.get('name'))!r}")
-    for g in data.get("goals") or []:
+            if is_empty_name(row.get("name")):
+                empties.add(f"{key}[{i}]")
+    for i, g in enumerate(data.get("goals") or []):
         for obj in [g.get("scorer")] + list(g.get("assists") or []):
             if is_placeholder_name(obj):
                 placeholders.add(f"goals: {name_label(obj)!r}")
-    for gk in data.get("goalies") or []:
+        if g.get("scorer") is not None and is_empty_name(g.get("scorer")):
+            empties.add(f"goals[{i}].scorer")
+        for j, a in enumerate(g.get("assists") or []):
+            if is_empty_name(a):
+                empties.add(f"goals[{i}].assists[{j}]")
+    for i, gk in enumerate(data.get("goalies") or []):
         if is_placeholder_name(gk.get("name")):
             placeholders.add(f"goalies: {name_label(gk.get('name'))!r}")
+        if is_empty_name(gk.get("name")):
+            empties.add(f"goalies[{i}]")
+        saves = gk.get("saves")
+        if saves is not None and not is_count(saves):
+            warnings.append(f"goalies[{i}].saves must be a whole number or null, got {saves!r}")
     for p in sorted(placeholders):
         warnings.append(f"template example name left in ({p}); delete it or use the real name")
+    for p in sorted(empties):
+        warnings.append(f"{p} has a name object with every field empty (the graphic would print '?'); "
+                        "fill at least 'last', or delete the row")
 
     finish = data.get("finish")
     if finish not in ("REG", "OT", "SO"):
@@ -774,6 +977,8 @@ def validate(path: str) -> int:
     elif finish in ("OT", "SO") and abs(home["goals"] - away["goals"]) != 1:
         warnings.append(f"finish is {finish} but the margin is {abs(home['goals'] - away['goals'])}; "
                         "an overtime or shootout game is won by exactly one goal")
+    so_h = 1 if finish == "SO" and home["goals"] > away["goals"] else 0
+    so_a = 1 if finish == "SO" and away["goals"] > home["goals"] else 0
     if us_side:
         us, them = (home, away) if us_side == "home" else (away, home)
         final = data.get("status", "final") == "final"
@@ -788,49 +993,93 @@ def validate(path: str) -> int:
                 scored += int(row.get("goals") or 0)
             except (TypeError, ValueError):
                 usable = False
-                warnings.append(f"scorers_us row {row!r} has no usable goal count")
+                warnings.append(f"scorers_us row {name_label(row.get('name'))!r} has no usable goal count "
+                                f"({row.get('goals')!r})")
         if usable and rows:
             if scored > us["goals"]:
                 warnings.append(f"scorers_us adds up to {scored} goals but Näädät scored {us['goals']}")
             elif scored < us["goals"]:
-                warnings.append(f"scorer list incomplete: scorers_us adds up to {scored} goals but Näädät scored "
-                                f"{us['goals']}. Ask the user for the missing scorers, or empty scorers_us "
-                                "if they are unknown (a partial list reads as the whole story)")
+                notes.append(f"partial scorer list: scorers_us adds up to {scored} of Näädät's {us['goals']} "
+                             "goals. That is fine when the user knows only these; the graphic marks the list "
+                             "as partial. Tell the user.")
+
+        shots = data.get("shots")
+        if shots is not None:
+            if not isinstance(shots, dict) or not is_count(shots.get("us")) or not is_count(shots.get("them")):
+                warnings.append(f"shots must be null or {{\"us\": n, \"them\": n}} with whole numbers, got {shots!r}")
+            else:
+                us_so, them_so = (so_h, so_a) if us_side == "home" else (so_a, so_h)
+                for who, team, so in (("us", us, us_so), ("them", them, them_so)):
+                    if shots[who] < team["goals"] - so:
+                        warnings.append(f"shots.{who} is {shots[who]}, fewer than the {team['goals'] - so} "
+                                        "goals scored; every goal is a shot on goal. Fix it or set shots to null")
 
     if data.get("goals"):
         w = goal_log_warning(data)
         if w:
             warnings.append(w[len("WARNING: "):])
 
-    periods = [p for p in data.get("periods") or [] if p.get("label") != "SO"]
+    periods_all = data.get("periods") or []
+    if finish != "SO" and any(p.get("label") == "SO" for p in periods_all):
+        warnings.append(f"periods has an SO row but finish is {finish}; set finish to SO or remove the row")
+    if finish == "REG" and any(p.get("label") == "OT" for p in periods_all):
+        warnings.append("periods has an OT row but finish is REG; set finish to OT or SO, or remove the row")
+    periods = [p for p in periods_all if p.get("label") != "SO"]
     if periods:
         try:
             ph, pa = sum(int(p["home"]) for p in periods), sum(int(p["away"]) for p in periods)
-            so_h = 1 if finish == "SO" and home["goals"] > away["goals"] else 0
-            so_a = 1 if finish == "SO" and away["goals"] > home["goals"] else 0
             if (ph, pa) != (home["goals"] - so_h, away["goals"] - so_a):
                 warnings.append(f"periods add up to {ph}-{pa} but the score is {home['goals']}-{away['goals']}")
         except (KeyError, TypeError, ValueError):
             warnings.append("periods need a label, home and away (whole numbers) on every row")
 
-    base = os.path.dirname(os.path.abspath(path))
-    for key in ("home", "away"):
-        logo = data[key].get("logo_file")
-        if logo:
-            resolved = logo if os.path.isabs(str(logo)) else os.path.join(base, str(logo))
-            if not os.path.isfile(resolved):
-                logo_warnings.append(f"{key}.logo_file {logo!r} not found (looked in {resolved}); "
-                                     "the graphic will show a lettered badge")
+    return finish_validate(summary_line(data, "Checked", path, us_side), warnings, notes,
+                           logo_checks(data, path), "game.json")
 
-    print(summary_line(data, "Checked", path, us_side))
-    for w in warnings + logo_warnings:
-        print(f"WARNING: {w}")
-    if warnings:
-        print(f"Fix game.json or ask the user, then run --validate again (exit {EXIT_WARNINGS}).")
-        return EXIT_WARNINGS
-    if not logo_warnings:
-        print("No problems found.")
-    return 0
+
+def validate_pregame(path: str, data: dict) -> int:
+    errors = []
+    for key in ("home", "away"):
+        team = data.get(key)
+        if not isinstance(team, dict):
+            errors.append(f"'{key}' is missing or not an object")
+        elif not str(team.get("name") or "").strip():
+            errors.append(f"'{key}.name' is empty")
+    if errors:
+        return report_errors(path, errors)
+
+    cfg = load_config()
+    warnings, notes = [], []
+    us_side = team_checks(data, cfg, warnings)
+
+    date = str(data.get("date") or "").strip()
+    day = None
+    try:
+        day = dt.datetime.strptime(date, "%Y-%m-%d").date()
+    except ValueError:
+        warnings.append(f"date {data.get('date')!r} is not ISO YYYY-MM-DD; set the game day")
+    if day is not None:
+        if data.get("source") == "manual" and date == pregame_template_date():
+            warnings.append(f"date {date} is the template's example date; set the real game day")
+        if day < helsinki_today():
+            warnings.append(f"date {fi_date(day)} is in the past; a pre-game post is for an upcoming game")
+        weekday = str(data.get("weekday") or "").strip()
+        if weekday and weekday.upper() != weekday_code(day):
+            warnings.append(f"weekday {weekday!r} does not match {fi_date(day)} ({weekday_code(day)}); "
+                            "fix it or remove the key")
+    time_s = str(data.get("time") or "").strip()
+    if not re.fullmatch(r"([01]?\d|2[0-3]):[0-5]\d", time_s):
+        warnings.append(f"time {data.get('time')!r} must be the kick-off as 24-hour HH:MM (Helsinki time); "
+                        "ask the user if unknown")
+    if not str(data.get("arena") or "").strip():
+        warnings.append("arena is empty; ask the user where the game is played")
+    if data.get("status", "scheduled") != "scheduled":
+        warnings.append(f"status is {data.get('status')!r}; a pre-game file has status 'scheduled'")
+    if not str(data.get("competition") or "").strip():
+        notes.append("competition is empty; the graphic shows no competition line")
+
+    return finish_validate(pregame_line(data, "Checked", path, us_side), warnings, notes,
+                           logo_checks(data, path), "pregame.json")
 
 
 def no_match(what: str, seasons: list, explicit: int = None) -> str:
@@ -861,21 +1110,16 @@ def check_season(explicit: int, g: dict) -> int:
     return derived
 
 
-def fetch_by_id(args, cfg: dict, explicit: int) -> int:
-    """A known game id: the report carries everything, so fetch it first. The
-    schedule only fills gaps (DeniedResults); if it cannot be reached, go on."""
+def fetch_report_by_id(args, cfg: dict, explicit: int, seasons: list):
+    """The game report of args.game_id, trying each season in turn; checked to be
+    a game of our club. Returns (report, game entry, season)."""
     assoc = cfg["leijonat"]["association_id"]
-    if explicit:
-        seasons = [explicit]
-    else:
-        current = season_for(helsinki_today())
-        seasons = [current, current - 1]
-    report, season = None, None
+    report = None
     for s in seasons:
         args._help_season = s
         r = get_json("gamereport/getgamereportdata", {"gameid": args.game_id, "season": s})
         if report_game(r) is not None:
-            report, season = r, s
+            report = r
             break
     if report is None:
         raise Stop(no_match(f"game id {args.game_id}", seasons, explicit))
@@ -884,17 +1128,175 @@ def fetch_by_id(args, cfg: dict, explicit: int) -> int:
         raise Stop(f"The results service returned game {g['GameID']} for game id {args.game_id}.")
     if assoc not in (g["HomeAssociationID"], g["AwayAssociationID"]):
         raise Stop(f"Game {args.game_id} is not a game of our club.\n{MANUAL_HINT}")
-    season = check_season(explicit, g)
-    entry = None
+    return report, g, check_season(explicit, g)
+
+
+def schedule_entry(cfg: dict, season: int, game_id: int):
+    """The schedule entry of one game, or None when the schedule cannot be reached
+    (the report alone is then used)."""
     try:
-        entry = next((x for x in discover_games(cfg, season) if x.get("GameID") == args.game_id), None)
+        return next((x for x in discover_games(cfg, season) if x.get("GameID") == game_id), None)
     except NetError as exc:
         print(f"note: the schedule could not be reached ({exc.reason}); using the game report alone.",
               file=sys.stderr)
+        return None
+
+
+def fetch_by_id(args, cfg: dict, explicit: int) -> int:
+    """A known game id: the report carries everything, so fetch it first. The
+    schedule only fills gaps (DeniedResults); if it cannot be reached, go on."""
+    if explicit:
+        seasons = [explicit]
+    else:
+        current = season_for(helsinki_today())
+        seasons = [current, current - 1]
+    report, _, season = fetch_report_by_id(args, cfg, explicit, seasons)
+    entry = schedule_entry(cfg, season, args.game_id)
     merged = game_from_report(report, entry)
     if not is_final(merged) and not args.allow_unfinished:
         raise not_final_stop(merged, cfg)
     return write(build(merged, report, cfg, season), args.out)
+
+
+def pregame_data(g: dict, cfg: dict, season: int, report: dict = None, entry: dict = None) -> dict:
+    """The pregame@1 record of a scheduled game. g is a game entry (schedule or
+    game_from_report); the arena is the fullest rink name either source gives."""
+    assoc = cfg["leijonat"]["association_id"]
+    us_home = g["HomeAssociationID"] == assoc
+
+    def side(prefix: str, is_us: bool) -> dict:
+        img = g.get(f"{prefix}Img") or ""
+        source_name = g.get(f"{prefix}TeamAbbrv") or ""
+        return {
+            "name": cfg["display_name"] if is_us else source_name,
+            "source_name": source_name,
+            "association_id": g.get(f"{prefix}AssociationID"),
+            "is_us": is_us,
+            "logo_url": f"{BASE}/images/associations/weblogos/200x200/{img}" if img else None,
+        }
+
+    # The report's Arena is the rink's full name ('Ilmatar Areena' where the schedule
+    # says 'Matinkylä I'), but it may be empty before the game: then the schedule's.
+    rinks = [(report_game(report) or {}).get("Arena"), (entry or {}).get("RinkName"), g.get("RinkName")]
+    rinks = [" ".join(str(r).split()) for r in rinks if isinstance(r, str) and r.strip()]
+    when = game_datetime(g)
+    return {
+        "schema": PREGAME_SCHEMA,
+        "source": "leijonat",
+        "game_id": g["GameID"],
+        "season": season,
+        "url": f"{BASE}/game?season={season}&gameid={g['GameID']}&lang=fi",
+        "competition": cfg.get("competition_label") or g.get("LevelName", ""),
+        "series": g.get("SubSerieName", ""),
+        "date": when.date().isoformat(),
+        "time": when.strftime("%H:%M"),
+        "weekday": weekday_code(when.date()),
+        "arena": rinks[0] if rinks else "",
+        "home": side("Home", us_home),
+        "away": side("Away", not us_home),
+        "us_side": "home" if us_home else "away",
+        "status": "scheduled",
+    }
+
+
+def write_pregame(g: dict, cfg: dict, season: int, out: str, report: dict = None, entry: dict = None) -> int:
+    if is_final(g):
+        raise Stop(f"Game {g['GameID']} has already been played ({describe(g, cfg).strip()}). A pre-game post "
+                   "is for an upcoming game: run without --pregame/--next for the result post, or use --next "
+                   "for the next game.")
+    try:
+        data = pregame_data(g, cfg, season, report, entry)
+    except (KeyError, TypeError, AttributeError, ValueError, IndexError) as exc:
+        raise Stop(f"The data for game {g.get('GameID')} has an unexpected shape ({type(exc).__name__}: {exc}).")
+    if g.get("GameStatus") not in (0, None) or game_datetime(g) <= helsinki_now():
+        print(f"note: game {g['GameID']} has already started (kick-off {data['time']} on {fi_date(data['date'])}); "
+              "a pre-game post normally goes out before kick-off.", file=sys.stderr)
+    with open(out, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+    print(pregame_line(data, "Wrote", out))
+    if not data["arena"]:
+        print("WARNING: the results service names no rink for this game; ask the user and fill in arena.")
+    return 0
+
+
+def run_pregame(args, cfg: dict, explicit: int, day) -> int:
+    """--pregame / --next: write pregame.json for a game that has not been played."""
+    assoc = cfg["leijonat"]["association_id"]
+    current = season_for(helsinki_today())
+    schedule = None
+    if args.games_json:
+        schedule = load_json_file(args.games_json, "--games-json")
+        if not isinstance(schedule, list):
+            raise Stop(f"{args.games_json} is not a helpers/getgames response (expected a JSON list).")
+        schedule = team_games(schedule, assoc)
+
+    if args.report_json:
+        report = load_report(args.report_json)
+        rid = report_game(report)["Id"]
+        if args.game_id and rid != args.game_id:
+            raise Stop(f"The report is for game {rid}, not the requested {args.game_id}.")
+        entry = next((x for x in schedule or [] if x.get("GameID") == rid), None)
+        g = game_from_report(report, entry)
+        if assoc not in (g["HomeAssociationID"], g["AwayAssociationID"]):
+            raise Stop("This game report is not a game of our club.")
+        return write_pregame(g, cfg, check_season(explicit, g), args.out, report, entry)
+
+    if args.game_id and schedule is None:
+        seasons = [explicit] if explicit else [current, current + 1]
+        report, _, season = fetch_report_by_id(args, cfg, explicit, seasons)
+        entry = schedule_entry(cfg, season, args.game_id)
+        return write_pregame(game_from_report(report, entry), cfg, season, args.out, report, entry)
+
+    if explicit:
+        seasons = [explicit]
+    elif day:
+        seasons = [season_for(day)]
+    else:
+        seasons = [current, current + 1]  # in summer the next game is in next season
+    now = helsinki_now()
+    pick = None
+    for season in seasons:
+        args._help_season = season
+        games = schedule if schedule is not None else discover_games(cfg, season)
+        games = sorted(games, key=game_datetime)
+        if args.game_id:
+            found = [x for x in games if x["GameID"] == args.game_id]
+        elif day:
+            same_day = [x for x in games if game_datetime(x).date() == day]
+            found = [x for x in same_day if not is_final(x)] or same_day
+        else:
+            # Not started yet, kick-off still ahead (a game later today counts).
+            found = [x for x in games if not is_final(x) and x.get("GameStatus") in (0, None)
+                     and game_datetime(x) >= now]
+        if found:
+            pick = found[0]
+            break
+        if schedule is not None:
+            break
+    if pick is None:
+        if args.game_id:
+            what = f"game id {args.game_id}"
+        elif day:
+            what = f"date {day.isoformat()}"
+        else:
+            raise Stop(f"No upcoming Näädät game on the III-divisioona schedule (season "
+                       f"{' or '.join(map(str, seasons))}).\nFor an FCAA or other game, fill "
+                       "references/manual_pregame_template.json by hand and check it with --validate.")
+        raise Stop(no_match(what, [] if schedule is not None else seasons, explicit))
+
+    season = check_season(explicit, pick)
+    args._help_season, args._help_game = season, pick["GameID"]
+    report = None
+    if schedule is None:
+        try:
+            r = get_json("gamereport/getgamereportdata", {"gameid": pick["GameID"], "season": season})
+            if report_game(r) is not None and report_game(r)["Id"] == pick["GameID"]:
+                report = r
+        except NetError as exc:
+            print(f"note: the game report could not be reached ({exc.reason}); using the schedule alone.",
+                  file=sys.stderr)
+    g = game_from_report(report, pick) if report is not None else pick
+    return write_pregame(g, cfg, season, args.out, report, pick)
 
 
 def run(args) -> int:
@@ -909,6 +1311,12 @@ def run(args) -> int:
         args.game_id = url_id
         explicit = explicit or url_season
     args._help_season = explicit
+
+    if args.next and (args.game_id or day):
+        raise Stop("--next picks the next game itself; leave out --game-id, --game-url and --date, "
+                   "or use them with --pregame instead of --next.")
+    if (args.pregame or args.next) and not args.list:
+        return run_pregame(args, cfg, explicit, day)
 
     report = load_report(args.report_json) if args.report_json else None
     if report is not None and args.games_json and not args.game_id and not day:
@@ -1016,6 +1424,10 @@ def run(args) -> int:
                    f"({describe(g, cfg).strip()}). Pass --game-id {report_id} to use the report's game, "
                    f"or save the report of game {g['GameID']}.")
     merged = game_from_report(report, g)
+    if not is_final(merged) and not args.allow_unfinished:
+        # The schedule may already say final while the report lags behind (or the
+        # other way round); the report is what gets written, so it decides.
+        raise not_final_stop(merged, cfg)
     return write(build(merged, report, cfg, season), args.out)
 
 
@@ -1036,14 +1448,23 @@ def main(argv=None) -> int:
                     help="accept a game that has started but is not marked final (exit 2 otherwise)")
     ap.add_argument("--games-json", help="offline: saved response of helpers/getgames (the schedule)")
     ap.add_argument("--report-json", help="offline: saved response of gamereport/getgamereportdata")
-    ap.add_argument("--validate", metavar="GAME_JSON",
-                    help="check a game.json (e.g. a hand-entered FCAA game), print its summary line and "
-                         "warnings. Exit 0 = clean (a missing logo_file alone is fine), 3 = a WARNING to fix "
-                         "before rendering, 1 = unusable")
-    ap.add_argument("--out", default="game.json")
+    ap.add_argument("--pregame", action="store_true",
+                    help="write pregame.json (kick-off, teams, logos, rink) for a game not played yet. "
+                         "Picks the game with --game-id, --game-url or --date; with none of them, the next game")
+    ap.add_argument("--next", action="store_true",
+                    help="the next Näädät game that has not started (a game later today counts); "
+                         "implies --pregame")
+    ap.add_argument("--validate", metavar="JSON",
+                    help="check a game.json or pregame.json (e.g. a hand-entered FCAA game; the schema field "
+                         "tells them apart), print its summary line, warnings and notes. Exit 0 = clean "
+                         "(a note or a missing logo_file alone is fine), 3 = a WARNING to fix before "
+                         "rendering, 1 = unusable")
+    ap.add_argument("--out", help="output file (default game.json, or pregame.json with --pregame/--next)")
     args = ap.parse_args(argv)
     args._help_season = None
     args._help_game = None
+    if not args.out:
+        args.out = "pregame.json" if (args.pregame or args.next) else "game.json"
 
     if args.validate:
         return validate(args.validate)

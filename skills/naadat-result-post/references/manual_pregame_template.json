@@ -1,0 +1,30 @@
+{
+  "schema": "naadat-result-post/pregame@1",
+  "source": "manual",
+  "competition": "FCAA",
+  "date": "2026-10-15",
+  "time": "",
+  "weekday": "",
+  "arena": "",
+  "us_side": "home",
+  "home": {
+    "name": "Näädät",
+    "is_us": true
+  },
+  "away": {
+    "name": "Opponent",
+    "is_us": false,
+    "logo_file": "opponent_logo.png"
+  },
+  "_help": {
+    "how_to": "Copy this file to pregame.json in your working folder and replace the example values with what the user told you (SKILL.md, pre-game step 1, manual path). Record only what the user said; never invent a time or a rink.",
+    "competition": "FCAA, or another competition name as the user gives it (III-divisioona games come from fetch_game.py --next instead)",
+    "date": "ISO date YYYY-MM-DD of the game, today or later. The example date must be replaced",
+    "time": "face-off time, 24-hour HH:MM (e.g. 21:00). Ask the user if unknown: the time is the point of the post",
+    "weekday": "optional three-letter weekday, e.g. SUN; --validate warns when it does not match date. Leave it empty to use the weekday of date",
+    "arena": "rink name as the user gives it (e.g. Kaarela 1). Ask the user if unknown",
+    "us_side": "home or away. Home when the user says so or the rink starts with an entry of team.json home_arenas (prefix match: 'Kaarela' covers 'Kaarela 1' and 'Kaarela 2'); away when the user says so or names the opponent's rink; ask the user if still unclear",
+    "home / away": "name of each team; is_us true for Näädät, false for the opponent. Swap the two blocks and set us_side to away for an away game. Näädät keeps the name Näädät",
+    "logo_file": "opponent logo file (PNG/JPG), a real file from the user or the club, path relative to the folder that holds pregame.json (just the file name when it sits next to it). Remove the key if there is no logo: the script then draws a lettered badge"
+  }
+}
