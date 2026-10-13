@@ -1,6 +1,6 @@
 # Setup per app
 
-The skill is one folder (`naadat-result-post/`) with `SKILL.md` at its root. It needs Python 3.8+ with Pillow 8.2 or newer, and for automatic fetching, internet access to `tulospalvelu.leijonat.fi`. Without that access it still works: the assistant asks you for the game report (SKILL.md, "Blocked network"). FCAA games are always entered by hand and need no network.
+The skill is one folder (`naadat-game-posts/`) with `SKILL.md` at its root. It needs Python 3.8+ with Pillow 8.2 or newer, and for automatic fetching, internet access to `tulospalvelu.leijonat.fi`. Without that access it still works: the assistant asks you for the game report (SKILL.md, "Blocked network"). FCAA games are always entered by hand and need no network.
 
 The commands below use `python`. On macOS and Linux, use `python3` where `python` is not found.
 
@@ -10,23 +10,23 @@ The commands below use `python`. On macOS and Linux, use `python3` where `python
 2. Network access for code execution:
    - Individual plans (Pro, Max): on the same page, turn on **Allow network egress**.
    - Team and Enterprise: an owner opens Organization settings > Capabilities and picks **Allow network egress to package managers and specific domains**, then adds `tulospalvelu.leijonat.fi`, or picks **All domains**.
-3. Customize > Skills > **+** > **Create skill** > **Upload a skill**, choose `naadat-result-post.zip` (from the repo's `dist/` folder) and switch it on. On Team and Enterprise plans an owner first enables Skills under Organization settings > Plugins & skills (Policy tab).
+3. Customize > Skills > **+** > **Create skill** > **Upload a skill**, choose `naadat-game-posts.zip` (from the repo's `dist/` folder) and switch it on. On Team and Enterprise plans an owner first enables Skills under Organization settings > Plugins & skills (Policy tab).
 4. In a new chat: "Make the result post for last night's Näädät game." or "Make the game day post for tonight."
 
 ## Claude Code
 
 ```bash
-cp -r skills/naadat-result-post ~/.claude/skills/
+cp -r skills/naadat-game-posts ~/.claude/skills/
 python -m pip install --user -U pillow
 ```
 
-On Windows, copy the `skills\naadat-result-post` folder in File Explorer into `%USERPROFILE%\.claude\skills\` (create the folder if it is missing), then run `python -m pip install --user -U pillow` in a terminal.
+On Windows, copy the `skills\naadat-game-posts` folder in File Explorer into `%USERPROFILE%\.claude\skills\` (create the folder if it is missing), then run `python -m pip install --user -U pillow` in a terminal.
 
 ## Codex (CLI, IDE extension, app)
 
 ```bash
 mkdir -p ~/.agents/skills
-cp -r skills/naadat-result-post ~/.agents/skills/
+cp -r skills/naadat-game-posts ~/.agents/skills/
 python -m pip install --user -U pillow
 ```
 
@@ -43,7 +43,7 @@ network_access = true
 
 ## Any other assistant (ChatGPT, Gemini, ...)
 
-Upload the zip and say: "Unzip this, read naadat-result-post/SKILL.md and follow it for last night's game." Sandboxes without internet use the "Blocked network" path in SKILL.md.
+Upload the zip and say: "Unzip this, read naadat-game-posts/SKILL.md and follow it for last night's game." Sandboxes without internet use the "Blocked network" path in SKILL.md.
 
 ## Installing Pillow
 
@@ -58,7 +58,7 @@ The distro package (`apt install python3-pil`) is too old on Debian 11 (Pillow 8
 
 ## Checking an install (for maintainers)
 
-Run from any folder; `SKILL_DIR` is the installed `naadat-result-post` folder. The output goes to a temporary folder, never into the skill folder (on claude.ai the skill folder is read-only).
+Run from any folder; `SKILL_DIR` is the installed `naadat-game-posts` folder. The output goes to a temporary folder, never into the skill folder (on claude.ai the skill folder is read-only).
 
 ```bash
 OUT="$(mktemp -d)"

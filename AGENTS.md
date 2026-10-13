@@ -1,6 +1,6 @@
 # Agents
 
-This repo ships one agent skill: `skills/naadat-result-post/`. To make a Näädät pre-game or post-game Instagram post, read `skills/naadat-result-post/SKILL.md` and follow it.
+This repo ships one agent skill: `skills/naadat-game-posts/`. To make a Näädät pre-game or post-game Instagram post, read `skills/naadat-game-posts/SKILL.md` and follow it.
 
 When changing the skill:
 
@@ -13,4 +13,4 @@ When changing the skill:
 - README.md promises only what SKILL.md does. A behaviour change updates both, and a visual change refreshes the README example renders in `docs/` (`example_result_home.jpg`, `example_result_away.jpg`, `example_pregame.jpg`, `example_summary.jpg`).
 - `game.json` (post-game) and `pregame.json` (pre-game) are the contracts between `fetch_game.py`, hand-entered games (`references/manual_game_template.json`, `references/manual_pregame_template.json`) and `render_card.py`; a key change updates all three plus SKILL.md. The templates carry literal placeholders (`YYYY-MM-DD`, `HH:MM`, `Opponent`) that `--validate` rejects until replaced.
 - Keep the SKILL.md `description` at 200 characters or fewer (the claude.ai upload limit; `tools/build_zip.py` enforces it).
-- Rebuild the upload zip with `python tools/build_zip.py` and commit `dist/naadat-result-post.zip`: non-technical users download it straight from the repo.
+- Rebuild the upload zip with `python tools/build_zip.py` and commit `dist/naadat-game-posts.zip`: non-technical users download it straight from the repo.

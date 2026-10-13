@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build dist/naadat-result-post.zip for uploading to Claude (Customize > Skills > + > Create skill >
+"""Build dist/naadat-game-posts.zip for uploading to Claude (Customize > Skills > + > Create skill >
 Upload a skill) or any other assistant. The zip holds the skill folder at its root, as Claude expects.
 dist/ is committed so non-technical users can download the zip from the repo; rebuild after every
 change to skills/. Skips __pycache__, .cache and compiled .pyc files. Refuses to build when the
@@ -11,8 +11,8 @@ import sys
 import zipfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SKILL = os.path.join(ROOT, "skills", "naadat-result-post")
-OUT = os.path.join(ROOT, "dist", "naadat-result-post.zip")
+SKILL = os.path.join(ROOT, "skills", "naadat-game-posts")
+OUT = os.path.join(ROOT, "dist", "naadat-game-posts.zip")
 PHOTOS = os.path.join(SKILL, "assets", "photos")
 SKIP_DIRS = {"__pycache__", ".cache", ".ruff_cache", ".pytest_cache", ".mypy_cache"}
 PHOTO_EXTS = (".jpg", ".jpeg", ".png", ".webp")
@@ -64,5 +64,5 @@ with zipfile.ZipFile(OUT, "w", zipfile.ZIP_DEFLATED) as z:
             if name.endswith((".pyc", ".pyo")):
                 continue
             full = os.path.join(dirpath, name)
-            z.write(full, os.path.join("naadat-result-post", os.path.relpath(full, SKILL)))
+            z.write(full, os.path.join("naadat-game-posts", os.path.relpath(full, SKILL)))
 print("wrote", OUT, os.path.getsize(OUT), "bytes")

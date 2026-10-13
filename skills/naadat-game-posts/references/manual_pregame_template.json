@@ -1,5 +1,5 @@
 {
-  "schema": "naadat-result-post/pregame@1",
+  "schema": "naadat-game-posts/pregame@1",
   "source": "manual",
   "competition": "FCAA",
   "date": "YYYY-MM-DD",

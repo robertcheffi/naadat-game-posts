@@ -1,5 +1,5 @@
 ---
-name: naadat-result-post
+name: naadat-game-posts
 description: Näädät (@naadathockey) Instagram posts incl. FCAA: pre-game game-day post (matchday, face-off) and post-game result post (final score, summary). Use for game day or result posts.
 ---
 

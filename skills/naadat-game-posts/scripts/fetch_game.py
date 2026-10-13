@@ -91,8 +91,8 @@ PLACEHOLDER_FULL_NAMES = {"first last"}
 # The templates ship these literal placeholders; --validate warns while one is left.
 PLACEHOLDER_DATE = "YYYY-MM-DD"
 PLACEHOLDER_TIME = "HH:MM"
-GAME_SCHEMA = "naadat-result-post/game@1"
-PREGAME_SCHEMA = "naadat-result-post/pregame@1"
+GAME_SCHEMA = "naadat-game-posts/game@1"
+PREGAME_SCHEMA = "naadat-game-posts/pregame@1"
 WEEKDAYS = ("MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN")
 
 
@@ -208,7 +208,7 @@ def network_help(url: str, exc: object, game_id: int = None, season: int = None)
 def get_json(path: str, params: dict) -> object:
     query = "&".join(f"{k}={urllib.parse.quote(str(v))}" for k, v in params.items())
     url = f"{BASE}/{path}?{query}"
-    req = urllib.request.Request(url, headers={"accept": "application/json", "user-agent": "naadat-result-post/1.0"})
+    req = urllib.request.Request(url, headers={"accept": "application/json", "user-agent": "naadat-game-posts/1.0"})
     try:
         with urllib.request.urlopen(req, timeout=30) as resp:
             body = resp.read()

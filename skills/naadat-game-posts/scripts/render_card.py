@@ -3,7 +3,7 @@
 
 Input is a game.json (post-game) or a pregame.json (game day), both written by
 fetch_game.py or by hand from the templates in references/. The kind is
-detected from the file's schema (naadat-result-post/pregame@1 = game day).
+detected from the file's schema (naadat-game-posts/pregame@1 = game day).
 
 Outputs, all 1080x1350 and metadata-free (see clean_image.py):
   post-game   <out>/result_feed.jpg    slide 1: photo, FINAL, both logos, score,
@@ -93,7 +93,7 @@ except AttributeError:  # Pillow < 9.1
 
 AI_REFUSAL_EXIT = 4
 EXIT_NOT_FINAL = 2
-PREGAME_SCHEMA = "naadat-result-post/pregame@1"
+PREGAME_SCHEMA = "naadat-game-posts/pregame@1"
 # Fallback when clean_image has no ai_provenance(): byte-pattern hits that mean
 # the file declares AI generation or editing (IPTC DigitalSourceType, C2PA).
 _AI_BACKSTOP_KEYS = ("digitalsourcetype", "c2pa", "jumb", "cabx")
@@ -444,10 +444,10 @@ def _find_logo(team):
     url = team.get("logo_url")
     if url:
         try:
-            cache = os.path.join(tempfile.gettempdir(), "naadat-result-post-logos")
+            cache = os.path.join(tempfile.gettempdir(), "naadat-game-posts-logos")
             os.makedirs(cache, exist_ok=True)
             dest = os.path.join(cache, "logo_%s.png" % (team.get("association_id") or zlib.crc32(url.encode())))
-            req = urllib.request.Request(url, headers={"user-agent": "naadat-result-post/1.0"})
+            req = urllib.request.Request(url, headers={"user-agent": "naadat-game-posts/1.0"})
             with urllib.request.urlopen(req, timeout=20) as r, open(dest, "wb") as f:
                 f.write(r.read())
             marks = ai_marks(dest)
@@ -1223,7 +1223,7 @@ def finish(img, seed):
 
 
 def is_pregame(game):
-    return str(game.get("schema") or "").startswith("naadat-result-post/pregame")
+    return str(game.get("schema") or "").startswith("naadat-game-posts/pregame")
 
 
 def main(argv=None):

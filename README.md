@@ -31,14 +31,14 @@ III-divisioona games are read from the official results service, tulospalvelu.le
 
 ## Install
 
-1. Download [naadat-result-post.zip](dist/naadat-result-post.zip). On GitHub: click the file name, then the download button (the arrow at the top right of the file view).
+1. Download [naadat-game-posts.zip](dist/naadat-game-posts.zip). On GitHub: click the file name, then the download button (the arrow at the top right of the file view).
 2. Add it to your assistant:
    - **Claude (claude.ai or the desktop app)**: open Settings > Capabilities and turn on **Code execution and file creation** and network access (**Allow network egress**; on Team and Enterprise plans an owner adds `tulospalvelu.leijonat.fi` to the allowed domains). Then go to Customize > Skills, press **+** > **Create skill** > **Upload a skill**, choose the zip and switch the skill on.
-   - **Claude Code**: copy the `naadat-result-post` folder (inside the zip, or `skills/naadat-result-post` in a clone of this repo) into `~/.claude/skills/`.
+   - **Claude Code**: copy the `naadat-game-posts` folder (inside the zip, or `skills/naadat-game-posts` in a clone of this repo) into `~/.claude/skills/`.
    - **Codex**: copy the same folder into `~/.agents/skills/`.
-   - **Other assistants**: upload the zip in the chat and say "Unzip this, read naadat-result-post/SKILL.md and follow it."
+   - **Other assistants**: upload the zip in the chat and say "Unzip this, read naadat-game-posts/SKILL.md and follow it."
 
-Step-by-step instructions for each app, including the network settings and the Pillow install: [setup.md](skills/naadat-result-post/references/setup.md).
+Step-by-step instructions for each app, including the network settings and the Pillow install: [setup.md](skills/naadat-game-posts/references/setup.md).
 
 ## How to use
 
@@ -70,20 +70,20 @@ The posts use game photos by:
 - **Vanninen Photos** ([@vanninenphotos](https://www.instagram.com/vanninenphotos/))
 - **FCAA / Topias Rouhiainen**
 
-The club holds the rights to use these photos in its own posts. The photos are bundled in [`skills/naadat-result-post/assets/photos/`](skills/naadat-result-post/assets/photos/) for that purpose only; ask the photographers before using them anywhere else. The caption of every post credits the photographer of the photo it shows.
+The club holds the rights to use these photos in its own posts. The photos are bundled in [`skills/naadat-game-posts/assets/photos/`](skills/naadat-game-posts/assets/photos/) for that purpose only; ask the photographers before using them anywhere else. The caption of every post credits the photographer of the photo it shows.
 
 ## Changing logos, colours, hashtags and photos
 
 Ask whoever maintains the skill: on claude.ai the installed skill cannot be edited, so every change goes into a new zip that everyone uploads again. For maintainers:
 
-All team settings live in [`skills/naadat-result-post/assets/brand/team.json`](skills/naadat-result-post/assets/brand/team.json): team name, team logo, the caption sign-off, hashtags and the results-service ids. Each setting is explained in the file's `_help` block.
+All team settings live in [`skills/naadat-game-posts/assets/brand/team.json`](skills/naadat-game-posts/assets/brand/team.json): team name, team logo, the caption sign-off, hashtags and the results-service ids. Each setting is explained in the file's `_help` block.
 
 - **Team logo**: put a square PNG (1000 px or more) in `assets/brand/` and set its file name in `logo`.
 - **Opponent logo**: for a single post, the user simply attaches the logo in the chat. To keep it for later games, put a PNG in `assets/logos/` named by the club's association id: the number in the link of the club's logo on tulospalvelu.leijonat.fi (for example `10115736.png`).
-- **Colours**: change `GREEN`, `ORANGE` and `CREAM` near the top of `skills/naadat-result-post/scripts/render_card.py` (home posts use green, away posts orange).
+- **Colours**: change `GREEN`, `ORANGE` and `CREAM` near the top of `skills/naadat-game-posts/scripts/render_card.py` (home posts use green, away posts orange).
 - **Photos**: add a real camera photo the club may use (long edge about 1600 px, saved without metadata) to `assets/photos/` and add an entry for it to `assets/photos/photos.json` with the file name, the photographer credit exactly as it should appear in the caption, the crop centre (`focus`, as fractions of width and height) and the jersey colour. Add the photographer to the photo credits above.
 
-Then rebuild the zip with `python tools/build_zip.py`, commit `dist/naadat-result-post.zip`, and ask everyone to download the new zip from the link above and upload it again. Claude Code and Codex read the copied skill folder directly, so there a change to that folder applies at once.
+Then rebuild the zip with `python tools/build_zip.py`, commit `dist/naadat-game-posts.zip`, and ask everyone to download the new zip from the link above and upload it again. Claude Code and Codex read the copied skill folder directly, so there a change to that folder applies at once.
 
 ## No AI label
 
@@ -96,8 +96,8 @@ Instagram can still label a post for reasons outside the files, so when you post
 
 ## Fonts and licences
 
-The graphics use [Anton](https://fonts.google.com/specimen/Anton), [Barlow](https://fonts.google.com/specimen/Barlow) and [Barlow Condensed](https://fonts.google.com/specimen/Barlow+Condensed), all under the SIL Open Font License 1.1. The licence texts are in `skills/naadat-result-post/assets/fonts/` (`OFL-Anton.txt`, `OFL-Barlow.txt`, `OFL-BarlowCondensed.txt`). Team logos belong to their clubs, and the photos to their photographers (see Photo credits).
+The graphics use [Anton](https://fonts.google.com/specimen/Anton), [Barlow](https://fonts.google.com/specimen/Barlow) and [Barlow Condensed](https://fonts.google.com/specimen/Barlow+Condensed), all under the SIL Open Font License 1.1. The licence texts are in `skills/naadat-game-posts/assets/fonts/` (`OFL-Anton.txt`, `OFL-Barlow.txt`, `OFL-BarlowCondensed.txt`). Team logos belong to their clubs, and the photos to their photographers (see Photo credits).
 
 ## For developers
 
-See [AGENTS.md](AGENTS.md). The skill itself is [`skills/naadat-result-post/SKILL.md`](skills/naadat-result-post/SKILL.md). Requirements: Python 3.8+ and Pillow 8.2+.
+See [AGENTS.md](AGENTS.md). The skill itself is [`skills/naadat-game-posts/SKILL.md`](skills/naadat-game-posts/SKILL.md). Requirements: Python 3.8+ and Pillow 8.2+.
