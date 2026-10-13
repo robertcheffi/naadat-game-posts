@@ -1,0 +1,22 @@
+{
+  "display_name": "Näädät",
+  "full_name": "Hernesaaren Näädät",
+  "instagram": "@naadathockey",
+  "competition_label": "III-divisioona",
+  "logo": "naadat_n_logo.png",
+  "colors": {
+    "green_dark": "#06200F",
+    "green": "#0E3B22",
+    "green_mid": "#17552F",
+    "orange": "#F7892A",
+    "cream": "#F5F1E6",
+    "white": "#FFFFFF"
+  },
+  "caption_signoff": "💚🧡",
+  "hashtags": ["#naadathockey", "#hernesaarennäädät", "#näädät", "#jääkiekko", "#icehockey", "#aaltouniversity"],
+  "leijonat": {
+    "association_id": 10114931,
+    "level_id": 68,
+    "district_id": 9
+  }
+}

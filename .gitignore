@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+.cache/
+out/
+post/
+test/
+game.json
+report.json

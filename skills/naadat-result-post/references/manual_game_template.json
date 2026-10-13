@@ -1,0 +1,46 @@
+{
+  "schema": "naadat-result-post/game@1",
+  "source": "manual",
+  "competition": "FCAA",
+  "date": "2026-10-15",
+  "time": "21:00",
+  "arena": "Helsingin jäähalli",
+  "attendance": null,
+  "finish": "REG",
+  "result": "W",
+  "us_side": "home",
+  "home": {
+    "name": "Näädät",
+    "goals": 4,
+    "is_us": true
+  },
+  "away": {
+    "name": "Opponent",
+    "goals": 2,
+    "is_us": false,
+    "logo_file": "opponent_logo.png"
+  },
+  "periods": [
+    {"label": "1", "home": 1, "away": 0},
+    {"label": "2", "home": 2, "away": 1},
+    {"label": "3", "home": 1, "away": 1}
+  ],
+  "goals": [],
+  "scorers_us": [
+    {"name": {"full": "First Last", "short": "F. Last", "last": "Last", "first": "First"}, "goals": 2, "assists": 0}
+  ],
+  "scorers_them": [],
+  "shots": null,
+  "goalies": [],
+  "_help": {
+    "finish": "REG, OT or SO",
+    "result": "W, L, OTW, OTL, SOW or SOL, from Näädät's point of view",
+    "us_side": "home or away: which of the two teams is Näädät",
+    "logo_file": "path to the opponent logo (PNG/JPG), relative to where you run render_card.py; omit for a lettered badge",
+    "periods": "optional; delete the list contents if unknown",
+    "goals": "optional goal log for slide 2: {period, time 'mm:ss' elapsed game time, team 'us'|'them', scorer {full, short, last, first}, assists [same shape], type '', 'PP', 'SH' or 'EN', score_after 'home-away'}",
+    "scorers_us": "Näädät scorers; goals > 0 shows them on slide 1. Leave empty if unknown",
+    "shots": "optional {us, them}",
+    "goalies": "optional [{name {full, short, last, first}, saves, is_us}]"
+  }
+}

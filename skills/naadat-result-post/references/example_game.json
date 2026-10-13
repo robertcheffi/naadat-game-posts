@@ -1,0 +1,886 @@
+{
+  "schema": "naadat-result-post/game@1",
+  "source": "leijonat",
+  "game_id": 19221,
+  "season": 2026,
+  "url": "https://tulospalvelu.leijonat.fi/game?season=2026&gameid=19221&lang=fi",
+  "competition": "III-divisioona",
+  "series": "III-divisioona, lohko 1 alkusarja",
+  "date": "2025-09-21",
+  "time": "21:10",
+  "arena": "Kaarela 1",
+  "attendance": 15,
+  "finish": "REG",
+  "result": "W",
+  "home": {
+    "name": "Näädät",
+    "source_name": "Näädät",
+    "association": "HERNESAAREN NÄÄDÄT RY",
+    "association_id": 10114931,
+    "goals": 11,
+    "is_us": true,
+    "logo_url": "https://tulospalvelu.leijonat.fi/images/associations/weblogos/200x200/2026/10114931.png"
+  },
+  "away": {
+    "name": "EVU Team",
+    "source_name": "EVU Team",
+    "association": "ETELÄ-VANTAAN URHEILIJAT",
+    "association_id": 10115736,
+    "goals": 9,
+    "is_us": false,
+    "logo_url": "https://tulospalvelu.leijonat.fi/images/associations/weblogos/200x200/2026/10115736.png"
+  },
+  "us_side": "home",
+  "periods": [
+    {
+      "label": "1",
+      "home": 3,
+      "away": 0
+    },
+    {
+      "label": "2",
+      "home": 3,
+      "away": 4
+    },
+    {
+      "label": "3",
+      "home": 5,
+      "away": 5
+    }
+  ],
+  "goals": [
+    {
+      "period": 1,
+      "time": "14:58",
+      "team": "us",
+      "scorer": {
+        "full": "Leevi Kuosmanen",
+        "short": "L. Kuosmanen",
+        "last": "Kuosmanen",
+        "first": "Leevi"
+      },
+      "jersey": 10,
+      "assists": [
+        {
+          "full": "Tuukka Lahtinen",
+          "short": "T. Lahtinen",
+          "last": "Lahtinen",
+          "first": "Tuukka"
+        }
+      ],
+      "type": "",
+      "type_raw": "",
+      "score_after": "1-0"
+    },
+    {
+      "period": 1,
+      "time": "19:07",
+      "team": "us",
+      "scorer": {
+        "full": "Leevi Kuosmanen",
+        "short": "L. Kuosmanen",
+        "last": "Kuosmanen",
+        "first": "Leevi"
+      },
+      "jersey": 10,
+      "assists": [
+        {
+          "full": "Jere Aunttila",
+          "short": "J. Aunttila",
+          "last": "Aunttila",
+          "first": "Jere"
+        },
+        {
+          "full": "Perttu Ahola",
+          "short": "P. Ahola",
+          "last": "Ahola",
+          "first": "Perttu"
+        }
+      ],
+      "type": "",
+      "type_raw": "",
+      "score_after": "2-0"
+    },
+    {
+      "period": 1,
+      "time": "19:26",
+      "team": "us",
+      "scorer": {
+        "full": "Tuukka Lahtinen",
+        "short": "T. Lahtinen",
+        "last": "Lahtinen",
+        "first": "Tuukka"
+      },
+      "jersey": 93,
+      "assists": [
+        {
+          "full": "Leevi Kuosmanen",
+          "short": "L. Kuosmanen",
+          "last": "Kuosmanen",
+          "first": "Leevi"
+        },
+        {
+          "full": "Perttu Ahola",
+          "short": "P. Ahola",
+          "last": "Ahola",
+          "first": "Perttu"
+        }
+      ],
+      "type": "",
+      "type_raw": "SR",
+      "score_after": "3-0"
+    },
+    {
+      "period": 2,
+      "time": "24:23",
+      "team": "them",
+      "scorer": {
+        "full": "Samu Pohja",
+        "short": "S. Pohja",
+        "last": "Pohja",
+        "first": "Samu"
+      },
+      "jersey": 86,
+      "assists": [
+        {
+          "full": "Iiro Valtonen",
+          "short": "I. Valtonen",
+          "last": "Valtonen",
+          "first": "Iiro"
+        },
+        {
+          "full": "Luca Hartonen",
+          "short": "L. Hartonen",
+          "last": "Hartonen",
+          "first": "Luca"
+        }
+      ],
+      "type": "PP",
+      "type_raw": "YV",
+      "score_after": "3-1"
+    },
+    {
+      "period": 2,
+      "time": "27:44",
+      "team": "them",
+      "scorer": {
+        "full": "Martti Kämäräinen",
+        "short": "M. Kämäräinen",
+        "last": "Kämäräinen",
+        "first": "Martti"
+      },
+      "jersey": 71,
+      "assists": [
+        {
+          "full": "Kasperi Kiviaho",
+          "short": "K. Kiviaho",
+          "last": "Kiviaho",
+          "first": "Kasperi"
+        },
+        {
+          "full": "Severi Salonen",
+          "short": "S. Salonen",
+          "last": "Salonen",
+          "first": "Severi"
+        }
+      ],
+      "type": "",
+      "type_raw": "",
+      "score_after": "3-2"
+    },
+    {
+      "period": 2,
+      "time": "33:28",
+      "team": "them",
+      "scorer": {
+        "full": "Severi Salonen",
+        "short": "S. Salonen",
+        "last": "Salonen",
+        "first": "Severi"
+      },
+      "jersey": 64,
+      "assists": [
+        {
+          "full": "Samu Pohja",
+          "short": "S. Pohja",
+          "last": "Pohja",
+          "first": "Samu"
+        },
+        {
+          "full": "Iiro Valtonen",
+          "short": "I. Valtonen",
+          "last": "Valtonen",
+          "first": "Iiro"
+        }
+      ],
+      "type": "",
+      "type_raw": "",
+      "score_after": "3-3"
+    },
+    {
+      "period": 2,
+      "time": "34:15",
+      "team": "them",
+      "scorer": {
+        "full": "Rony Österlund",
+        "short": "R. Österlund",
+        "last": "Österlund",
+        "first": "Rony"
+      },
+      "jersey": 93,
+      "assists": [
+        {
+          "full": "Luca Hartonen",
+          "short": "L. Hartonen",
+          "last": "Hartonen",
+          "first": "Luca"
+        },
+        {
+          "full": "Miko Kuittinen",
+          "short": "M. Kuittinen",
+          "last": "Kuittinen",
+          "first": "Miko"
+        }
+      ],
+      "type": "",
+      "type_raw": "",
+      "score_after": "3-4"
+    },
+    {
+      "period": 2,
+      "time": "37:58",
+      "team": "us",
+      "scorer": {
+        "full": "Leevi Paakkala",
+        "short": "L. Paakkala",
+        "last": "Paakkala",
+        "first": "Leevi"
+      },
+      "jersey": 7,
+      "assists": [
+        {
+          "full": "Leevi Kuosmanen",
+          "short": "L. Kuosmanen",
+          "last": "Kuosmanen",
+          "first": "Leevi"
+        },
+        {
+          "full": "Tuukka Lahtinen",
+          "short": "T. Lahtinen",
+          "last": "Lahtinen",
+          "first": "Tuukka"
+        }
+      ],
+      "type": "PP",
+      "type_raw": "YV",
+      "score_after": "4-4"
+    },
+    {
+      "period": 2,
+      "time": "39:07",
+      "team": "us",
+      "scorer": {
+        "full": "Oskari Kataja",
+        "short": "O. Kataja",
+        "last": "Kataja",
+        "first": "Oskari"
+      },
+      "jersey": 24,
+      "assists": [
+        {
+          "full": "Jere Aunttila",
+          "short": "J. Aunttila",
+          "last": "Aunttila",
+          "first": "Jere"
+        },
+        {
+          "full": "Iiro Koskimäki",
+          "short": "I. Koskimäki",
+          "last": "Koskimäki",
+          "first": "Iiro"
+        }
+      ],
+      "type": "",
+      "type_raw": "",
+      "score_after": "5-4"
+    },
+    {
+      "period": 2,
+      "time": "39:51",
+      "team": "us",
+      "scorer": {
+        "full": "Leevi Kuosmanen",
+        "short": "L. Kuosmanen",
+        "last": "Kuosmanen",
+        "first": "Leevi"
+      },
+      "jersey": 10,
+      "assists": [
+        {
+          "full": "Leevi Paakkala",
+          "short": "L. Paakkala",
+          "last": "Paakkala",
+          "first": "Leevi"
+        },
+        {
+          "full": "Perttu Ahola",
+          "short": "P. Ahola",
+          "last": "Ahola",
+          "first": "Perttu"
+        }
+      ],
+      "type": "PP",
+      "type_raw": "YV",
+      "score_after": "6-4"
+    },
+    {
+      "period": 3,
+      "time": "49:01",
+      "team": "us",
+      "scorer": {
+        "full": "Perttu Ahola",
+        "short": "P. Ahola",
+        "last": "Ahola",
+        "first": "Perttu"
+      },
+      "jersey": 8,
+      "assists": [
+        {
+          "full": "Tuukka Lahtinen",
+          "short": "T. Lahtinen",
+          "last": "Lahtinen",
+          "first": "Tuukka"
+        }
+      ],
+      "type": "",
+      "type_raw": "TV",
+      "score_after": "7-4"
+    },
+    {
+      "period": 3,
+      "time": "49:45",
+      "team": "us",
+      "scorer": {
+        "full": "Anton Lehtonen",
+        "short": "A. Lehtonen",
+        "last": "Lehtonen",
+        "first": "Anton"
+      },
+      "jersey": 55,
+      "assists": [
+        {
+          "full": "Oskari Kataja",
+          "short": "O. Kataja",
+          "last": "Kataja",
+          "first": "Oskari"
+        },
+        {
+          "full": "Sami Lukkari",
+          "short": "S. Lukkari",
+          "last": "Lukkari",
+          "first": "Sami"
+        }
+      ],
+      "type": "",
+      "type_raw": "TV",
+      "score_after": "8-4"
+    },
+    {
+      "period": 3,
+      "time": "50:21",
+      "team": "us",
+      "scorer": {
+        "full": "Tuukka Lahtinen",
+        "short": "T. Lahtinen",
+        "last": "Lahtinen",
+        "first": "Tuukka"
+      },
+      "jersey": 93,
+      "assists": [
+        {
+          "full": "Leevi Kuosmanen",
+          "short": "L. Kuosmanen",
+          "last": "Kuosmanen",
+          "first": "Leevi"
+        },
+        {
+          "full": "Daniel Tulensalo",
+          "short": "D. Tulensalo",
+          "last": "Tulensalo",
+          "first": "Daniel"
+        }
+      ],
+      "type": "PP",
+      "type_raw": "YV",
+      "score_after": "9-4"
+    },
+    {
+      "period": 3,
+      "time": "54:05",
+      "team": "us",
+      "scorer": {
+        "full": "Perttu Ahola",
+        "short": "P. Ahola",
+        "last": "Ahola",
+        "first": "Perttu"
+      },
+      "jersey": 8,
+      "assists": [
+        {
+          "full": "Tuukka Lahtinen",
+          "short": "T. Lahtinen",
+          "last": "Lahtinen",
+          "first": "Tuukka"
+        },
+        {
+          "full": "Jere Aunttila",
+          "short": "J. Aunttila",
+          "last": "Aunttila",
+          "first": "Jere"
+        }
+      ],
+      "type": "",
+      "type_raw": "",
+      "score_after": "10-4"
+    },
+    {
+      "period": 3,
+      "time": "54:15",
+      "team": "them",
+      "scorer": {
+        "full": "Otto Sillanpää",
+        "short": "O. Sillanpää",
+        "last": "Sillanpää",
+        "first": "Otto"
+      },
+      "jersey": 77,
+      "assists": [
+        {
+          "full": "Miko Kuittinen",
+          "short": "M. Kuittinen",
+          "last": "Kuittinen",
+          "first": "Miko"
+        },
+        {
+          "full": "Rony Österlund",
+          "short": "R. Österlund",
+          "last": "Österlund",
+          "first": "Rony"
+        }
+      ],
+      "type": "",
+      "type_raw": "",
+      "score_after": "10-5"
+    },
+    {
+      "period": 3,
+      "time": "54:35",
+      "team": "them",
+      "scorer": {
+        "full": "Juuso Turunen",
+        "short": "J. Turunen",
+        "last": "Turunen",
+        "first": "Juuso"
+      },
+      "jersey": 10,
+      "assists": [
+        {
+          "full": "Antti-Eemeli Haapanen",
+          "short": "A. Haapanen",
+          "last": "Haapanen",
+          "first": "Antti-Eemeli"
+        }
+      ],
+      "type": "",
+      "type_raw": "",
+      "score_after": "10-6"
+    },
+    {
+      "period": 3,
+      "time": "55:28",
+      "team": "them",
+      "scorer": {
+        "full": "Axel Saarinen",
+        "short": "A. Saarinen",
+        "last": "Saarinen",
+        "first": "Axel"
+      },
+      "jersey": 24,
+      "assists": [
+        {
+          "full": "Aapo Kuparinen",
+          "short": "A. Kuparinen",
+          "last": "Kuparinen",
+          "first": "Aapo"
+        },
+        {
+          "full": "Martti Kämäräinen",
+          "short": "M. Kämäräinen",
+          "last": "Kämäräinen",
+          "first": "Martti"
+        }
+      ],
+      "type": "PP",
+      "type_raw": "YV",
+      "score_after": "10-7"
+    },
+    {
+      "period": 3,
+      "time": "57:31",
+      "team": "them",
+      "scorer": {
+        "full": "Otto Sillanpää",
+        "short": "O. Sillanpää",
+        "last": "Sillanpää",
+        "first": "Otto"
+      },
+      "jersey": 77,
+      "assists": [
+        {
+          "full": "Miko Kuittinen",
+          "short": "M. Kuittinen",
+          "last": "Kuittinen",
+          "first": "Miko"
+        }
+      ],
+      "type": "",
+      "type_raw": "",
+      "score_after": "10-8"
+    },
+    {
+      "period": 3,
+      "time": "59:25",
+      "team": "them",
+      "scorer": {
+        "full": "Jame Waldén",
+        "short": "J. Waldén",
+        "last": "Waldén",
+        "first": "Jame"
+      },
+      "jersey": 56,
+      "assists": [
+        {
+          "full": "Aapo Kuparinen",
+          "short": "A. Kuparinen",
+          "last": "Kuparinen",
+          "first": "Aapo"
+        },
+        {
+          "full": "Axel Saarinen",
+          "short": "A. Saarinen",
+          "last": "Saarinen",
+          "first": "Axel"
+        }
+      ],
+      "type": "PP",
+      "type_raw": "YV",
+      "score_after": "10-9"
+    },
+    {
+      "period": 3,
+      "time": "59:45",
+      "team": "us",
+      "scorer": {
+        "full": "Robert Cheffi",
+        "short": "R. Cheffi",
+        "last": "Cheffi",
+        "first": "Robert"
+      },
+      "jersey": 71,
+      "assists": [
+        {
+          "full": "Daniel Tulensalo",
+          "short": "D. Tulensalo",
+          "last": "Tulensalo",
+          "first": "Daniel"
+        }
+      ],
+      "type": "EN",
+      "type_raw": "TM",
+      "score_after": "11-9"
+    }
+  ],
+  "scorers_us": [
+    {
+      "name": {
+        "full": "Leevi Kuosmanen",
+        "short": "L. Kuosmanen",
+        "last": "Kuosmanen",
+        "first": "Leevi"
+      },
+      "goals": 3,
+      "assists": 3
+    },
+    {
+      "name": {
+        "full": "Tuukka Lahtinen",
+        "short": "T. Lahtinen",
+        "last": "Lahtinen",
+        "first": "Tuukka"
+      },
+      "goals": 2,
+      "assists": 4
+    },
+    {
+      "name": {
+        "full": "Perttu Ahola",
+        "short": "P. Ahola",
+        "last": "Ahola",
+        "first": "Perttu"
+      },
+      "goals": 2,
+      "assists": 3
+    },
+    {
+      "name": {
+        "full": "Jere Aunttila",
+        "short": "J. Aunttila",
+        "last": "Aunttila",
+        "first": "Jere"
+      },
+      "goals": 0,
+      "assists": 3
+    },
+    {
+      "name": {
+        "full": "Oskari Kataja",
+        "short": "O. Kataja",
+        "last": "Kataja",
+        "first": "Oskari"
+      },
+      "goals": 1,
+      "assists": 1
+    },
+    {
+      "name": {
+        "full": "Leevi Paakkala",
+        "short": "L. Paakkala",
+        "last": "Paakkala",
+        "first": "Leevi"
+      },
+      "goals": 1,
+      "assists": 1
+    },
+    {
+      "name": {
+        "full": "Daniel Tulensalo",
+        "short": "D. Tulensalo",
+        "last": "Tulensalo",
+        "first": "Daniel"
+      },
+      "goals": 0,
+      "assists": 2
+    },
+    {
+      "name": {
+        "full": "Robert Cheffi",
+        "short": "R. Cheffi",
+        "last": "Cheffi",
+        "first": "Robert"
+      },
+      "goals": 1,
+      "assists": 0
+    },
+    {
+      "name": {
+        "full": "Anton Lehtonen",
+        "short": "A. Lehtonen",
+        "last": "Lehtonen",
+        "first": "Anton"
+      },
+      "goals": 1,
+      "assists": 0
+    },
+    {
+      "name": {
+        "full": "Iiro Koskimäki",
+        "short": "I. Koskimäki",
+        "last": "Koskimäki",
+        "first": "Iiro"
+      },
+      "goals": 0,
+      "assists": 1
+    },
+    {
+      "name": {
+        "full": "Sami Lukkari",
+        "short": "S. Lukkari",
+        "last": "Lukkari",
+        "first": "Sami"
+      },
+      "goals": 0,
+      "assists": 1
+    }
+  ],
+  "scorers_them": [
+    {
+      "name": {
+        "full": "Miko Kuittinen",
+        "short": "M. Kuittinen",
+        "last": "Kuittinen",
+        "first": "Miko"
+      },
+      "goals": 0,
+      "assists": 3
+    },
+    {
+      "name": {
+        "full": "Otto Sillanpää",
+        "short": "O. Sillanpää",
+        "last": "Sillanpää",
+        "first": "Otto"
+      },
+      "goals": 2,
+      "assists": 0
+    },
+    {
+      "name": {
+        "full": "Martti Kämäräinen",
+        "short": "M. Kämäräinen",
+        "last": "Kämäräinen",
+        "first": "Martti"
+      },
+      "goals": 1,
+      "assists": 1
+    },
+    {
+      "name": {
+        "full": "Samu Pohja",
+        "short": "S. Pohja",
+        "last": "Pohja",
+        "first": "Samu"
+      },
+      "goals": 1,
+      "assists": 1
+    },
+    {
+      "name": {
+        "full": "Axel Saarinen",
+        "short": "A. Saarinen",
+        "last": "Saarinen",
+        "first": "Axel"
+      },
+      "goals": 1,
+      "assists": 1
+    },
+    {
+      "name": {
+        "full": "Severi Salonen",
+        "short": "S. Salonen",
+        "last": "Salonen",
+        "first": "Severi"
+      },
+      "goals": 1,
+      "assists": 1
+    },
+    {
+      "name": {
+        "full": "Rony Österlund",
+        "short": "R. Österlund",
+        "last": "Österlund",
+        "first": "Rony"
+      },
+      "goals": 1,
+      "assists": 1
+    },
+    {
+      "name": {
+        "full": "Luca Hartonen",
+        "short": "L. Hartonen",
+        "last": "Hartonen",
+        "first": "Luca"
+      },
+      "goals": 0,
+      "assists": 2
+    },
+    {
+      "name": {
+        "full": "Aapo Kuparinen",
+        "short": "A. Kuparinen",
+        "last": "Kuparinen",
+        "first": "Aapo"
+      },
+      "goals": 0,
+      "assists": 2
+    },
+    {
+      "name": {
+        "full": "Iiro Valtonen",
+        "short": "I. Valtonen",
+        "last": "Valtonen",
+        "first": "Iiro"
+      },
+      "goals": 0,
+      "assists": 2
+    },
+    {
+      "name": {
+        "full": "Juuso Turunen",
+        "short": "J. Turunen",
+        "last": "Turunen",
+        "first": "Juuso"
+      },
+      "goals": 1,
+      "assists": 0
+    },
+    {
+      "name": {
+        "full": "Jame Waldén",
+        "short": "J. Waldén",
+        "last": "Waldén",
+        "first": "Jame"
+      },
+      "goals": 1,
+      "assists": 0
+    },
+    {
+      "name": {
+        "full": "Antti-Eemeli Haapanen",
+        "short": "A. Haapanen",
+        "last": "Haapanen",
+        "first": "Antti-Eemeli"
+      },
+      "goals": 0,
+      "assists": 1
+    },
+    {
+      "name": {
+        "full": "Kasperi Kiviaho",
+        "short": "K. Kiviaho",
+        "last": "Kiviaho",
+        "first": "Kasperi"
+      },
+      "goals": 0,
+      "assists": 1
+    }
+  ],
+  "shots": {
+    "us": 46,
+    "them": 46
+  },
+  "goalies": [
+    {
+      "team_name": "Näädät",
+      "name": {
+        "full": "Rasmus Inkovaara",
+        "short": "R. Inkovaara",
+        "last": "Inkovaara",
+        "first": "Rasmus"
+      },
+      "saves": 37,
+      "is_us": true
+    },
+    {
+      "team_name": "EVU Team",
+      "name": {
+        "full": "Oskari Laakso",
+        "short": "O. Laakso",
+        "last": "Laakso",
+        "first": "Oskari"
+      },
+      "saves": 35,
+      "is_us": false
+    }
+  ],
+  "status": "final"
+}
