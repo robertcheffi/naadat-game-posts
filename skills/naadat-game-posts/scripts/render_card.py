@@ -16,7 +16,8 @@ Outputs, all 1080x1350 and metadata-free (see clean_image.py):
   always      <out>/photo_credit.txt   the credit of the photo used, nothing else
 
 Look: a club poster. A home game is green, an away game orange (from
-us_side); every FCAA game is FCAA navy. A Näädät win reads WIN, not FINAL.
+us_side); every FCAA game is FCAA navy. A Näädät win adds a big slanted WIN
+across the foot of the photo.
 A graded photo panel on the left, the title set vertically on the
 right, square logo tiles overlapping the photo edge with the scores beside
 them, and a ruled info row at the foot. Anton for display type, Barlow for
@@ -909,6 +910,56 @@ def weekday_title(i, style="short"):
     return (DOW if style == "short" else DOW_LONG)[i]
 
 
+def result_title(img, t, game):
+    """The vertical title: FINAL (+ OT/SO) or LIVE. A Näädät win also gets win_mark."""
+    final = is_final(game)
+    fin = finish_word(game)
+    parts = [("FINAL" if final else "LIVE", t["title"])]
+    if final and fin:
+        parts.append((fin, t["accent"]))
+    vertical_title(img, parts, W - M, PHOTO[1], TILE_Y1 - TITLE_GAP - PHOTO[1], W - M - PHOTO[2] - 34)
+    if final and winner_side(game) == game.get("us_side", "home"):
+        win_mark(img, t)
+
+
+WIN_SKEW = 0.16                      # italic slant of the WIN mark
+
+
+def win_mark(img, t):
+    """A big slanted WIN across the foot of the photo, left of the logo tiles.
+
+    The photo darkens toward its foot so the word reads on bright ice, and the
+    word carries a soft drop shadow."""
+    x0, y0, x1, y1 = PHOTO
+    w, h = x1 - x0, y1 - y0
+    fade = Image.new("L", (w, h), 0)
+    fd = ImageDraw.Draw(fade)
+    reach = 460
+    for i in range(reach):
+        fd.line((0, h - 1 - i, w, h - 1 - i), fill=int(235 * (1 - i / reach) ** 1.3))
+    shade = Image.new("RGBA", (w, h), t["duo_dark"] + (0,))
+    shade.putalpha(fade)
+    img.alpha_composite(shade, (x0, y0))
+
+    f = font("display", 330)
+    l_, t_, r_, b_ = f.getbbox("WIN")
+    pad = 20
+    word = Image.new("RGBA", (r_ - l_ + 2 * pad + int(WIN_SKEW * (b_ - t_)), b_ - t_ + 2 * pad), (0, 0, 0, 0))
+    ImageDraw.Draw(word).text((pad - l_ + int(WIN_SKEW * (b_ - t_)), pad - t_), "WIN", font=f,
+                              fill=t["accent"] + (255,))
+    word = word.transform(word.size, Image.AFFINE, (1, WIN_SKEW, 0, 0, 1, 0), Image.BICUBIC)
+    word = word.crop(word.getbbox())
+    max_w = TILE_X - 24 - x0 - 24
+    if word.width > max_w:
+        k = max_w / word.width
+        word = word.resize((int(word.width * k), int(word.height * k)), LANCZOS)
+    pos = (x0 + 24, y1 - 28 - word.height)
+    shadow = Image.new("RGBA", word.size, (0, 0, 0, 0))
+    shadow.putalpha(word.getchannel("A").filter(ImageFilter.GaussianBlur(14)).point(lambda v: int(v * 0.55)))
+    img.alpha_composite(shadow, (pos[0] + 8, pos[1] + 12))
+    img.alpha_composite(word, pos)
+
+
 # ------------------------------------------------------------------ result card
 
 def result_card(game, photo, focus):
@@ -916,13 +967,7 @@ def result_card(game, photo, focus):
     t = THEMES[theme]
     img = background(theme, 11)
     photo_panel(img, t, photo, focus)
-    final = is_final(game)
-    fin = finish_word(game)
-    won_it = final and winner_side(game) == game.get("us_side", "home")
-    parts = [("WIN" if won_it else ("FINAL" if final else "LIVE"), t["accent"] if won_it else t["title"])]
-    if final and fin:
-        parts.append((fin, t["accent"]))
-    vertical_title(img, parts, W - M, PHOTO[1], TILE_Y1 - TITLE_GAP - PHOTO[1], W - M - PHOTO[2] - 34)
+    result_title(img, t, game)
 
     home, away = game["home"], game["away"]
     hg, ag = goals_of(home), goals_of(away)

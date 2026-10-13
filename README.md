@@ -2,7 +2,7 @@
 
 An assistant skill that makes Näädät's Instagram posts around every game. Ask your AI assistant (Claude, Codex, ChatGPT and others) for "the game day post for tonight" or "the result post for last night's game", and you get the finished images plus a caption to copy. Every image is Instagram post size (1080x1350).
 
-Home games get a green post and away games an orange one, automatically; FCAA games use the FCAA navy. When Näädät win, the result post says WIN in big orange letters instead of FINAL. Every post shows a real game photo from the skill's own photo library: you never need to send a photo, and the assistant switches photos from game to game.
+Home games get a green post and away games an orange one, automatically; FCAA games use the FCAA navy. When Näädät win, the result post gets a big slanted orange WIN across the photo. Every post shows a real game photo from the skill's own photo library: you never need to send a photo, and the assistant switches photos from game to game.
 
 **Pre-game post**, for game day:
 
@@ -11,7 +11,7 @@ Home games get a green post and away games an orange one, automatically; FCAA ga
 
 **Post-game post**, after the final horn:
 
-- **Slide 1** (`result_feed.jpg`): WIN (or FINAL after a loss), a game photo, both team logos, the score, date, rink and period scores.
+- **Slide 1** (`result_feed.jpg`): FINAL, a game photo (with a big WIN across it after a win), both team logos, the score, date, rink and period scores.
 - **Slide 2** (`summary_feed.jpg`): every goal with time and assists, shots, power-play goals and goalie saves. Made when the goal log is known.
 - An English caption, ready to copy.
 
